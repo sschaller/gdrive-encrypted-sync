@@ -1,7 +1,7 @@
 {
-  "name": "github-gitless-sync",
-  "version": "1.0.7",
-  "description": "Sync a GitHub repository with vaults on different platforms without requiring git installation",
+  "name": "gdrive-encrypted-sync",
+  "version": "1.0.0",
+  "description": "Sync your Obsidian vault to Google Drive with AES-256-GCM encryption for both filenames and contents",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -34,8 +34,7 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.2",
     "@uiw/react-codemirror": "^4.23.8",
-    "@zip.js/zip.js": "^2.7.60",
-    "codemirror": "^6.0.1",
+"codemirror": "^6.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   }

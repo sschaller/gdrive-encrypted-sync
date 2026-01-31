@@ -1,8 +1,8 @@
 import { Vault, TAbstractFile, TFolder } from "obsidian";
 import MetadataStore, { MANIFEST_FILE_NAME } from "./metadata-store";
-import { GitHubSyncSettings } from "./settings/settings";
+import { GDriveSyncSettings } from "./settings/settings";
 import Logger, { LOG_FILE_NAME } from "./logger";
-import GitHubSyncPlugin from "./main";
+import GDriveSyncPlugin from "./main";
 
 /**
  * Tracks changes to local sync directory and updates files metadata.
@@ -11,11 +11,11 @@ export default class EventsListener {
   constructor(
     private vault: Vault,
     private metadataStore: MetadataStore,
-    private settings: GitHubSyncSettings,
+    private settings: GDriveSyncSettings,
     private logger: Logger,
   ) {}
 
-  start(plugin: GitHubSyncPlugin) {
+  start(plugin: GDriveSyncPlugin) {
     // We need to register all the events we subscribe to so they can
     // be correctly detached when the plugin is unloaded too.
     // If we don't they might be left hanging and cause issues.
@@ -49,11 +49,13 @@ export default class EventsListener {
 
     this.metadataStore.data.files[file.path] = {
       path: file.path,
-      sha: null,
+      contentHash: null,
       dirty: true,
       // This file has been created by the user
       justDownloaded: false,
       lastModified: Date.now(),
+      driveFileId: null,
+      obfuscatedName: null,
     };
     await this.metadataStore.save();
     await this.logger.info("Updated created file", file.path);

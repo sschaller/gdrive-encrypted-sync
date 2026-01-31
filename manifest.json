@@ -1,9 +1,9 @@
 {
-  "id": "github-gitless-sync",
-  "name": "GitHub Gitless Sync",
-  "version": "1.0.7",
+  "id": "gdrive-encrypted-sync",
+  "name": "Google Drive Encrypted Sync",
+  "version": "1.0.0",
   "minAppVersion": "1.7.7",
-  "description": "Sync a GitHub repository with vaults on different platforms without requiring git installation",
+  "description": "Sync your Obsidian vault to Google Drive with AES-256-GCM encryption for both filenames and contents",
   "author": "Silvano Cerza",
   "authorUrl": "https://silvanocerza.com",
   "fundingUrl": "https://ko-fi.com/silvanocerza",

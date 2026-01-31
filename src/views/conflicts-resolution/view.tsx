@@ -1,6 +1,6 @@
 import { IconName, ItemView, Menu, Platform, WorkspaceLeaf } from "obsidian";
 import { Root, createRoot } from "react-dom/client";
-import GitHubSyncPlugin from "src/main";
+import GDriveSyncPlugin from "src/main";
 import { ConflictFile, ConflictResolution } from "src/sync-manager";
 import SplitView from "./split-view/split-view";
 import UnifiedView from "./unified-view/unified-view";
@@ -13,7 +13,7 @@ export class ConflictsResolutionView extends ItemView {
 
   constructor(
     leaf: WorkspaceLeaf,
-    private plugin: GitHubSyncPlugin,
+    private plugin: GDriveSyncPlugin,
     private conflicts: ConflictFile[],
   ) {
     super(leaf);

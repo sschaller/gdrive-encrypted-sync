@@ -1,9 +1,13 @@
-export interface GitHubSyncSettings {
+export interface GDriveSyncSettings {
   firstSync: boolean;
-  githubToken: string;
-  githubOwner: string;
-  githubRepo: string;
-  githubBranch: string;
+  googleClientId: string;
+  googleClientSecret: string;
+  googleRefreshToken: string;
+  googleAccessToken: string;
+  googleTokenExpiry: number;
+  encryptionPassword: string;
+  driveFolderId: string;
+  driveFolderName: string;
   syncStrategy: "manual" | "interval";
   syncInterval: number;
   syncOnStartup: boolean;
@@ -16,12 +20,16 @@ export interface GitHubSyncSettings {
   enableLogging: boolean;
 }
 
-export const DEFAULT_SETTINGS: GitHubSyncSettings = {
+export const DEFAULT_SETTINGS: GDriveSyncSettings = {
   firstSync: true,
-  githubToken: "",
-  githubOwner: "",
-  githubRepo: "",
-  githubBranch: "main",
+  googleClientId: "",
+  googleClientSecret: "",
+  googleRefreshToken: "",
+  googleAccessToken: "",
+  googleTokenExpiry: 0,
+  encryptionPassword: "",
+  driveFolderId: "",
+  driveFolderName: "ObsidianSync",
   syncStrategy: "manual",
   syncInterval: 1,
   syncOnStartup: false,

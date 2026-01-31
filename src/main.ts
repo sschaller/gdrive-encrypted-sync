@@ -5,17 +5,26 @@ import {
   normalizePath,
   Notice,
 } from "obsidian";
-import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
-import GitHubSyncSettingsTab from "./settings/tab";
+import { GDriveSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
+import GDriveSyncSettingsTab from "./settings/tab";
 import SyncManager, { ConflictFile, ConflictResolution } from "./sync-manager";
 import Logger from "./logger";
 import {
   ConflictsResolutionView,
   CONFLICTS_RESOLUTION_VIEW_TYPE,
 } from "./views/conflicts-resolution/view";
+import type { Server } from "http";
+import {
+  generateCodeVerifier,
+  generateCodeChallenge,
+  generateState,
+  buildAuthUrl,
+  exchangeCodeForTokens,
+  startLoopbackServer,
+} from "./gdrive/oauth";
 
-export default class GitHubSyncPlugin extends Plugin {
-  settings: GitHubSyncSettings;
+export default class GDriveSyncPlugin extends Plugin {
+  settings: GDriveSyncSettings;
   syncManager: SyncManager;
   logger: Logger;
 
@@ -39,13 +48,12 @@ export default class GitHubSyncPlugin extends Plugin {
   // and it gets destroyed.
   // By keeping them here we can recreate it easily.
   private conflicts: ConflictFile[] = [];
+  private oauthServer: Server | null = null;
 
   async onUserEnable() {
     if (
-      this.settings.githubToken === "" ||
-      this.settings.githubOwner === "" ||
-      this.settings.githubRepo === "" ||
-      this.settings.githubBranch === ""
+      this.settings.encryptionPassword === "" ||
+      this.settings.googleRefreshToken === ""
     ) {
       new Notice("Go to settings to configure syncing");
     }
@@ -88,7 +96,7 @@ export default class GitHubSyncPlugin extends Plugin {
       (leaf) => new ConflictsResolutionView(leaf, this, this.conflicts),
     );
 
-    this.addSettingTab(new GitHubSyncSettingsTab(this.app, this));
+    this.addSettingTab(new GDriveSyncSettingsTab(this.app, this));
 
     this.syncManager = new SyncManager(
       this.app.vault,
@@ -97,6 +105,10 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger,
     );
     await this.syncManager.loadMetadata();
+
+    if (this.settings.encryptionPassword) {
+      await this.syncManager.initCryptoKey();
+    }
 
     if (this.settings.syncStrategy == "interval") {
       this.restartSyncInterval();
@@ -126,7 +138,7 @@ export default class GitHubSyncPlugin extends Plugin {
 
     this.addCommand({
       id: "sync-files",
-      name: "Sync with GitHub",
+      name: "Sync with Google Drive",
       repeatable: false,
       icon: "refresh-cw",
       callback: this.sync.bind(this),
@@ -141,12 +153,55 @@ export default class GitHubSyncPlugin extends Plugin {
     });
   }
 
+  async startOAuthFlow() {
+    if (!this.settings.googleClientId) {
+      new Notice("Set Google Client ID first");
+      return;
+    }
+
+    // Kill any leftover server from a previous attempt
+    if (this.oauthServer) {
+      this.oauthServer.close();
+      this.oauthServer = null;
+    }
+
+    const codeVerifier = generateCodeVerifier();
+    const challenge = await generateCodeChallenge(codeVerifier);
+    const state = generateState();
+
+    const { port, codePromise, server } = await startLoopbackServer(state);
+    this.oauthServer = server;
+    const redirectUri = `http://127.0.0.1:${port}`;
+    const url = buildAuthUrl(this.settings.googleClientId, challenge, redirectUri, state);
+    window.open(url);
+
+    try {
+      const code = await codePromise;
+      const tokens = await exchangeCodeForTokens(
+        this.settings.googleClientId,
+        this.settings.googleClientSecret,
+        code,
+        codeVerifier,
+        redirectUri,
+      );
+      this.settings.googleAccessToken = tokens.access_token;
+      this.settings.googleRefreshToken =
+        tokens.refresh_token || this.settings.googleRefreshToken;
+      this.settings.googleTokenExpiry =
+        Date.now() + tokens.expires_in * 1000;
+      await this.saveSettings();
+      new Notice("Connected to Google Drive");
+    } catch (err) {
+      new Notice(`OAuth failed: ${err}`);
+    } finally {
+      this.oauthServer = null;
+    }
+  }
+
   async sync() {
     if (
-      this.settings.githubToken === "" ||
-      this.settings.githubOwner === "" ||
-      this.settings.githubRepo === "" ||
-      this.settings.githubBranch === ""
+      this.settings.encryptionPassword === "" ||
+      this.settings.googleRefreshToken === ""
     ) {
       new Notice("Sync plugin not configured");
       return;
@@ -173,6 +228,10 @@ export default class GitHubSyncPlugin extends Plugin {
 
   async onunload() {
     this.stopSyncInterval();
+    if (this.oauthServer) {
+      this.oauthServer.close();
+      this.oauthServer = null;
+    }
   }
 
   showStatusBarItem() {
@@ -223,7 +282,7 @@ export default class GitHubSyncPlugin extends Plugin {
       state = "Up to date";
     }
 
-    this.statusBarItem.setText(`GitHub: ${state}`);
+    this.statusBarItem.setText(`GDrive: ${state}`);
   }
 
   showSyncRibbonIcon() {
@@ -232,7 +291,7 @@ export default class GitHubSyncPlugin extends Plugin {
     }
     this.syncRibbonIcon = this.addRibbonIcon(
       "refresh-cw",
-      "Sync with GitHub",
+      "Sync with Google Drive",
       this.sync.bind(this),
     );
   }

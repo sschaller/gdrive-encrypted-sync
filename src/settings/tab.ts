@@ -6,13 +6,13 @@ import {
   Modal,
   Notice,
 } from "obsidian";
-import GitHubSyncPlugin from "src/main";
+import GDriveSyncPlugin from "src/main";
 import { copyToClipboard } from "src/utils";
 
-export default class GitHubSyncSettingsTab extends PluginSettingTab {
-  plugin: GitHubSyncPlugin;
+export default class GDriveSyncSettingsTab extends PluginSettingTab {
+  plugin: GDriveSyncPlugin;
 
-  constructor(app: App, plugin: GitHubSyncPlugin) {
+  constructor(app: App, plugin: GDriveSyncPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
@@ -22,74 +22,124 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
 
     containerEl.empty();
 
-    new Setting(containerEl).setName("Remote Repository").setHeading();
+    new Setting(containerEl).setName("Google Drive").setHeading();
 
-    let tokenInput: TextComponent;
     new Setting(containerEl)
-      .setName("GitHub token")
+      .setName("Google Client ID")
       .setDesc(
-        "A personal access token or a fine-grained token with read and write access to your repository",
+        "OAuth 2.0 Client ID from Google Cloud Console (Desktop app type)",
       )
+      .addText((text) =>
+        text
+          .setPlaceholder("Client ID")
+          .setValue(this.plugin.settings.googleClientId)
+          .onChange(async (value) => {
+            this.plugin.settings.googleClientId = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    let secretInput: TextComponent;
+    new Setting(containerEl)
+      .setName("Google Client Secret")
+      .setDesc("OAuth 2.0 Client Secret from Google Cloud Console")
       .addButton((button) =>
-        button.setIcon("eye-off").onClick((e) => {
-          if (tokenInput.inputEl.type === "password") {
-            tokenInput.inputEl.type = "text";
+        button.setIcon("eye-off").onClick(() => {
+          if (secretInput.inputEl.type === "password") {
+            secretInput.inputEl.type = "text";
             button.setIcon("eye");
           } else {
-            tokenInput.inputEl.type = "password";
+            secretInput.inputEl.type = "password";
             button.setIcon("eye-off");
           }
         }),
       )
       .addText((text) => {
         text
-          .setPlaceholder("Token")
-          .setValue(this.plugin.settings.githubToken)
+          .setPlaceholder("Client Secret")
+          .setValue(this.plugin.settings.googleClientSecret)
           .onChange(async (value) => {
-            this.plugin.settings.githubToken = value;
+            this.plugin.settings.googleClientSecret = value;
             await this.plugin.saveSettings();
           }).inputEl.type = "password";
-        tokenInput = text;
+        secretInput = text;
       });
 
+    const connectionStatus = this.plugin.settings.googleRefreshToken
+      ? "Connected"
+      : "Not connected";
+
+    const connectSetting = new Setting(containerEl)
+      .setName("Connection status")
+      .setDesc(connectionStatus);
+
+    if (this.plugin.settings.googleRefreshToken) {
+      connectSetting.addButton((button) =>
+        button.setButtonText("Disconnect").onClick(async () => {
+          this.plugin.settings.googleRefreshToken = "";
+          this.plugin.settings.googleAccessToken = "";
+          this.plugin.settings.googleTokenExpiry = 0;
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+      );
+    } else {
+      connectSetting.addButton((button) =>
+        button
+          .setButtonText("Connect")
+          .setCta()
+          .onClick(async () => {
+            await this.plugin.startOAuthFlow();
+          }),
+      );
+    }
+
     new Setting(containerEl)
-      .setName("Owner")
-      .setDesc("Owner of the repository to sync")
+      .setName("Drive folder name")
+      .setDesc("Name of the folder in Google Drive to sync to")
       .addText((text) =>
         text
-          .setPlaceholder("Owner")
-          .setValue(this.plugin.settings.githubOwner)
+          .setPlaceholder("ObsidianSync")
+          .setValue(this.plugin.settings.driveFolderName)
           .onChange(async (value) => {
-            this.plugin.settings.githubOwner = value;
+            this.plugin.settings.driveFolderName = value || "ObsidianSync";
             await this.plugin.saveSettings();
           }),
       );
 
-    new Setting(containerEl)
-      .setName("Repository")
-      .setDesc("Name of the repository to sync")
-      .addText((text) =>
-        text
-          .setPlaceholder("Repository")
-          .setValue(this.plugin.settings.githubRepo)
-          .onChange(async (value) => {
-            this.plugin.settings.githubRepo = value;
-            await this.plugin.saveSettings();
-          }),
-      );
+    new Setting(containerEl).setName("Encryption").setHeading();
 
+    let passwordInput: TextComponent;
     new Setting(containerEl)
-      .setName("Repository branch")
-      .setDesc("Branch to sync")
-      .addText((text) =>
+      .setName("Encryption password")
+      .setDesc(
+        "All files are encrypted with this password before uploading. " +
+          "There is no way to recover data if you forget this password.",
+      )
+      .addButton((button) =>
+        button.setIcon("eye-off").onClick(() => {
+          if (passwordInput.inputEl.type === "password") {
+            passwordInput.inputEl.type = "text";
+            button.setIcon("eye");
+          } else {
+            passwordInput.inputEl.type = "password";
+            button.setIcon("eye-off");
+          }
+        }),
+      )
+      .addText((text) => {
         text
-          .setPlaceholder("Branch name")
-          .setValue(this.plugin.settings.githubBranch)
+          .setPlaceholder("Password")
+          .setValue(this.plugin.settings.encryptionPassword)
           .onChange(async (value) => {
-            this.plugin.settings.githubBranch = value;
+            this.plugin.settings.encryptionPassword = value;
             await this.plugin.saveSettings();
-          }),
-      );
+            if (value) {
+              await this.plugin.syncManager.initCryptoKey();
+            }
+          }).inputEl.type = "password";
+        passwordInput = text;
+      });
 
     new Setting(containerEl).setName("Sync").setHeading();
 
@@ -99,7 +149,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     };
     const uploadStrategySetting = new Setting(containerEl)
       .setName("Sync strategy")
-      .setDesc("How to sync files with remote repository");
+      .setDesc("How to sync files with Google Drive");
 
     let syncInterval = "1";
     if (this.plugin.settings.syncInterval) {
@@ -153,7 +203,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Sync configs")
-      .setDesc("Sync Vault config folder with remote repository")
+      .setDesc("Sync Vault config folder with Google Drive")
       .addToggle((toggle) => {
         toggle
           .setValue(this.plugin.settings.syncConfigDir)
@@ -176,8 +226,7 @@ export default class GitHubSyncSettingsTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Conflict handling")
       .setDesc(
-        `What to do in case remote and local files conflict
-        when downloading from GitHub repository`,
+        "What to do in case remote and local files conflict when syncing with Google Drive",
       )
       .addDropdown((dropdown) => {
         dropdown

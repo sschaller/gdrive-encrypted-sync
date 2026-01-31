@@ -1,6 +1,6 @@
 import { Vault, normalizePath } from "obsidian";
 
-export const MANIFEST_FILE_NAME = "github-sync-metadata.json" as const;
+export const MANIFEST_FILE_NAME = "gdrive-sync-metadata.json" as const;
 
 /**
  * A file metadata.
@@ -14,9 +14,9 @@ export interface FileMetadata {
   // If this is null the file has not yet been pushed to the remote repository.
   // This doesn't change when the file is manually edited by the user but only
   // when uploading or downloading this file.
-  // In short this is the SHA of the remote file at the time of the last sync,
+  // In short this is the content hash of the remote file at the time of the last sync,
   // as far as the local environment is aware.
-  sha: string | null;
+  contentHash: string | null;
   // Whether the file has been modified locally.
   dirty: boolean;
   // This is mostly used to track if the file has been just downloaded from the remote.
@@ -30,11 +30,15 @@ export interface FileMetadata {
   deleted?: boolean | null;
   // When the file was deleted
   deletedAt?: number | null;
+  driveFileId: string | null;
+  obfuscatedName: string | null;
 }
 
 export interface Metadata {
   lastSync: number;
-  files: { [key: string]: FileMetadata };
+  files: Record<string, FileMetadata>;
+  encryptionSalt: string;
+  driveFolderId: string;
 }
 
 /**
@@ -61,7 +65,12 @@ export default class MetadataStore {
       const content = await this.vault.adapter.read(this.metadataFile);
       this.data = JSON.parse(content);
     } else {
-      this.data = { lastSync: 0, files: {} };
+      this.data = {
+        lastSync: 0,
+        files: {},
+        encryptionSalt: "",
+        driveFolderId: "",
+      };
     }
   }
 
@@ -79,6 +88,11 @@ export default class MetadataStore {
   }
 
   reset() {
-    this.data = { lastSync: 0, files: {} };
+    this.data = {
+      lastSync: 0,
+      files: {},
+      encryptionSalt: "",
+      driveFolderId: "",
+    };
   }
 }
