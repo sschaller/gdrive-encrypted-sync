@@ -206,6 +206,9 @@ export default class GDriveSyncPlugin extends Plugin {
       new Notice("Sync plugin not configured");
       return;
     }
+    this.syncManager.onProgress = (current, total) => {
+      this.statusBarItem?.setText(`GDrive: Syncing ${current}/${total}`);
+    };
     if (this.settings.firstSync) {
       const notice = new Notice("Syncing...");
       try {
@@ -223,6 +226,7 @@ export default class GDriveSyncPlugin extends Plugin {
     } else {
       await this.syncManager.sync();
     }
+    this.syncManager.onProgress = undefined;
     this.updateStatusBarItem();
   }
 

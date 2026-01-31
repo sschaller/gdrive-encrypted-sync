@@ -54,6 +54,7 @@ export default class SyncManager {
   // of messy conflicts.
   private syncing: boolean = false;
   private cryptoKey: CryptoKey | null = null;
+  onProgress?: (current: number, total: number) => void;
 
   constructor(
     private vault: Vault,
@@ -181,7 +182,8 @@ export default class SyncManager {
       (fp) => !this.metadataStore.data.files[fp].deleted,
     );
 
-    for (const filePath of filePaths) {
+    for (let i = 0; i < filePaths.length; i++) {
+      const filePath = filePaths[i];
       if (filePath === `${this.vault.configDir}/${MANIFEST_FILE_NAME}`) {
         continue;
       }
@@ -201,6 +203,7 @@ export default class SyncManager {
       this.metadataStore.data.files[filePath].driveFileId = driveFile.id;
       this.metadataStore.data.files[filePath].obfuscatedName = obfuscatedName;
       this.metadataStore.data.files[filePath].dirty = false;
+      this.onProgress?.(i + 1, filePaths.length);
     }
 
     await this.finalizeSync(folderId, null);
@@ -264,7 +267,9 @@ export default class SyncManager {
     }
 
     // Download and decrypt each file
-    for (const [filePath, fileMeta] of Object.entries(remoteMetadata.files)) {
+    const remoteEntries = Object.entries(remoteMetadata.files);
+    for (let i = 0; i < remoteEntries.length; i++) {
+      const [filePath, fileMeta] = remoteEntries[i];
       if (filePath === `${this.vault.configDir}/${MANIFEST_FILE_NAME}`) {
         continue;
       }
@@ -302,6 +307,7 @@ export default class SyncManager {
         driveFileId: driveFile.id,
         obfuscatedName: fileMeta.obfuscatedName,
       };
+      this.onProgress?.(i + 1, remoteEntries.length);
     }
 
     await this.finalizeSync(folderId, manifestFile.id);
@@ -443,7 +449,8 @@ export default class SyncManager {
     await this.logger.info("Actions to sync", actions);
 
     // Execute actions
-    for (const action of actions) {
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
       switch (action.type) {
         case "upload": {
           const normalizedPath = normalizePath(action.filePath);
@@ -556,6 +563,7 @@ export default class SyncManager {
           break;
         }
       }
+      this.onProgress?.(i + 1, actions.length);
     }
 
     // Write conflict resolutions to local files
