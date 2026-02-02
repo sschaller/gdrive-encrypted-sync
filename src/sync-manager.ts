@@ -208,6 +208,9 @@ export default class SyncManager {
       }
       const vaultPath = this.toVaultPath(filePath);
       const normalizedPath = normalizePath(vaultPath);
+      if (!(await this.vault.adapter.exists(normalizedPath))) {
+        continue;
+      }
       const content = await this.vault.adapter.readBinary(normalizedPath);
       const contentHash = await computeContentHash(content);
       const encrypted = await encryptContent(content, this.cryptoKey!);
@@ -487,6 +490,10 @@ export default class SyncManager {
           if (resolution) {
             content = new TextEncoder().encode(resolution.content).buffer;
           } else {
+            if (!(await this.vault.adapter.exists(normalizedPath))) {
+              // File doesn't exist locally, nothing to upload
+              break;
+            }
             content = await this.vault.adapter.readBinary(normalizedPath);
           }
 
@@ -896,6 +903,10 @@ export default class SyncManager {
         files.push(...res.files);
         folders.push(...res.folders);
       }
+      files = files.filter((f) => {
+        const basename = f.split("/").pop() || "";
+        return !basename.startsWith(".");
+      });
       files.forEach((filePath: string) => {
         if (filePath === `${this.vault.configDir}/workspace.json`) {
           // Obsidian recommends not syncing the workspace file

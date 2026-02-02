@@ -1,6 +1,6 @@
 import { Vault, normalizePath } from "obsidian";
 
-export const LOG_FILE_NAME = "github-sync.log" as const;
+export const LOG_FILE_NAME = "gdrive-sync.log" as const;
 
 export default class Logger {
   private logFile: string;
