@@ -1,13 +1,20 @@
-export interface GDriveSyncSettings {
-  firstSync: boolean;
-  googleClientId: string;
-  googleClientSecret: string;
+export interface SyncProfile {
+  id: string;
+  name: string;
   googleRefreshToken: string;
   googleAccessToken: string;
   googleTokenExpiry: number;
   encryptionPassword: string;
   driveFolderId: string;
   driveFolderName: string;
+  localFolder: string;
+  firstSync: boolean;
+}
+
+export interface GDriveSyncSettings {
+  googleClientId: string;
+  googleClientSecret: string;
+  profiles: SyncProfile[];
   syncStrategy: "manual" | "interval";
   syncInterval: number;
   syncOnStartup: boolean;
@@ -20,16 +27,25 @@ export interface GDriveSyncSettings {
   enableLogging: boolean;
 }
 
+export function createDefaultProfile(): SyncProfile {
+  return {
+    id: crypto.randomUUID(),
+    name: "Default",
+    googleRefreshToken: "",
+    googleAccessToken: "",
+    googleTokenExpiry: 0,
+    encryptionPassword: "",
+    driveFolderId: "",
+    driveFolderName: "ObsidianSync",
+    localFolder: "",
+    firstSync: true,
+  };
+}
+
 export const DEFAULT_SETTINGS: GDriveSyncSettings = {
-  firstSync: true,
   googleClientId: "",
   googleClientSecret: "",
-  googleRefreshToken: "",
-  googleAccessToken: "",
-  googleTokenExpiry: 0,
-  encryptionPassword: "",
-  driveFolderId: "",
-  driveFolderName: "ObsidianSync",
+  profiles: [createDefaultProfile()],
   syncStrategy: "manual",
   syncInterval: 1,
   syncOnStartup: false,

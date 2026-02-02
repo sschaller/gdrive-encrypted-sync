@@ -8,6 +8,7 @@ import {
 } from "obsidian";
 import GDriveSyncPlugin from "src/main";
 import { copyToClipboard } from "src/utils";
+import { SyncProfile, createDefaultProfile } from "./settings";
 
 export default class GDriveSyncSettingsTab extends PluginSettingTab {
   plugin: GDriveSyncPlugin;
@@ -22,6 +23,7 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
 
     containerEl.empty();
 
+    // ── Google Drive (shared credentials) ──
     new Setting(containerEl).setName("Google Drive").setHeading();
 
     new Setting(containerEl)
@@ -65,82 +67,29 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
         secretInput = text;
       });
 
-    const connectionStatus = this.plugin.settings.googleRefreshToken
-      ? "Connected"
-      : "Not connected";
+    // ── Sync Profiles ──
+    new Setting(containerEl).setName("Sync profiles").setHeading();
 
-    const connectSetting = new Setting(containerEl)
-      .setName("Connection status")
-      .setDesc(connectionStatus);
-
-    if (this.plugin.settings.googleRefreshToken) {
-      connectSetting.addButton((button) =>
-        button.setButtonText("Disconnect").onClick(async () => {
-          this.plugin.settings.googleRefreshToken = "";
-          this.plugin.settings.googleAccessToken = "";
-          this.plugin.settings.googleTokenExpiry = 0;
-          await this.plugin.saveSettings();
-          this.display();
-        }),
-      );
-    } else {
-      connectSetting.addButton((button) =>
-        button
-          .setButtonText("Connect")
-          .setCta()
-          .onClick(async () => {
-            await this.plugin.startOAuthFlow();
-          }),
-      );
+    for (let idx = 0; idx < this.plugin.settings.profiles.length; idx++) {
+      const profile = this.plugin.settings.profiles[idx];
+      this.renderProfile(containerEl, profile, idx);
     }
 
-    new Setting(containerEl)
-      .setName("Drive folder name")
-      .setDesc("Name of the folder in Google Drive to sync to")
-      .addText((text) =>
-        text
-          .setPlaceholder("ObsidianSync")
-          .setValue(this.plugin.settings.driveFolderName)
-          .onChange(async (value) => {
-            this.plugin.settings.driveFolderName = value || "ObsidianSync";
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(containerEl).setName("Encryption").setHeading();
-
-    let passwordInput: TextComponent;
-    new Setting(containerEl)
-      .setName("Encryption password")
-      .setDesc(
-        "All files are encrypted with this password before uploading. " +
-          "There is no way to recover data if you forget this password.",
-      )
-      .addButton((button) =>
-        button.setIcon("eye-off").onClick(() => {
-          if (passwordInput.inputEl.type === "password") {
-            passwordInput.inputEl.type = "text";
-            button.setIcon("eye");
-          } else {
-            passwordInput.inputEl.type = "password";
-            button.setIcon("eye-off");
-          }
+    new Setting(containerEl).addButton((button) =>
+      button
+        .setButtonText("Add profile")
+        .setCta()
+        .onClick(async () => {
+          const newProfile = createDefaultProfile();
+          newProfile.name = `Profile ${this.plugin.settings.profiles.length + 1}`;
+          this.plugin.settings.profiles.push(newProfile);
+          await this.plugin.saveSettings();
+          await this.plugin.initSyncManagers();
+          this.display();
         }),
-      )
-      .addText((text) => {
-        text
-          .setPlaceholder("Password")
-          .setValue(this.plugin.settings.encryptionPassword)
-          .onChange(async (value) => {
-            this.plugin.settings.encryptionPassword = value;
-            await this.plugin.saveSettings();
-            if (value) {
-              await this.plugin.syncManager.initCryptoKey();
-            }
-          }).inputEl.type = "password";
-        passwordInput = text;
-      });
+    );
 
+    // ── Sync ──
     new Setting(containerEl).setName("Sync").setHeading();
 
     const syncStrategies = {
@@ -210,9 +159,13 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.syncConfigDir = value;
             if (value) {
-              await this.plugin.syncManager.addConfigDirToMetadata();
+              for (const manager of this.plugin.syncManagers.values()) {
+                await manager.addConfigDirToMetadata();
+              }
             } else {
-              await this.plugin.syncManager.removeConfigDirFromMetadata();
+              for (const manager of this.plugin.syncManagers.values()) {
+                await manager.removeConfigDirFromMetadata();
+              }
             }
             await this.plugin.saveSettings();
           });
@@ -238,6 +191,7 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
           });
       });
 
+    // ── Interface ──
     new Setting(containerEl).setName("Interface").setHeading();
 
     new Setting(containerEl)
@@ -304,6 +258,7 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
           });
       });
 
+    // ── Extra ──
     new Setting(containerEl).setName("Extra").setHeading();
 
     new Setting(containerEl)
@@ -382,5 +337,183 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
             modal.open();
           });
       });
+  }
+
+  private renderProfile(
+    containerEl: HTMLElement,
+    profile: SyncProfile,
+    index: number,
+  ) {
+    const profiles = this.plugin.settings.profiles;
+    const detailsEl = containerEl.createEl("details", {
+      cls: "gdrive-sync-profile",
+    });
+    const summaryEl = detailsEl.createEl("summary");
+    summaryEl.setText(profile.name || `Profile ${index + 1}`);
+
+    // Profile name
+    new Setting(detailsEl)
+      .setName("Profile name")
+      .addText((text) =>
+        text
+          .setPlaceholder("My Profile")
+          .setValue(profile.name)
+          .onChange(async (value) => {
+            profile.name = value;
+            summaryEl.setText(value || `Profile ${index + 1}`);
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    // Local folder
+    new Setting(detailsEl)
+      .setName("Local folder")
+      .setDesc("Leave empty to sync the whole vault, or set a subfolder path")
+      .addText((text) =>
+        text
+          .setPlaceholder("e.g. some/folder")
+          .setValue(profile.localFolder)
+          .onChange(async (value) => {
+            profile.localFolder = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    // Connection status
+    const connectionStatus = profile.googleRefreshToken
+      ? "Connected"
+      : "Not connected";
+
+    const connectSetting = new Setting(detailsEl)
+      .setName("Connection status")
+      .setDesc(connectionStatus);
+
+    if (profile.googleRefreshToken) {
+      connectSetting.addButton((button) =>
+        button.setButtonText("Disconnect").onClick(async () => {
+          profile.googleRefreshToken = "";
+          profile.googleAccessToken = "";
+          profile.googleTokenExpiry = 0;
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+      );
+    } else {
+      connectSetting.addButton((button) =>
+        button
+          .setButtonText("Connect")
+          .setCta()
+          .onClick(async () => {
+            await this.plugin.startOAuthFlow(profile.id);
+            this.display();
+          }),
+      );
+    }
+
+    // Drive folder name
+    new Setting(detailsEl)
+      .setName("Drive folder name")
+      .setDesc("Name of the folder in Google Drive to sync to")
+      .addText((text) =>
+        text
+          .setPlaceholder("ObsidianSync")
+          .setValue(profile.driveFolderName)
+          .onChange(async (value) => {
+            profile.driveFolderName = value || "ObsidianSync";
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    // Encryption password
+    let passwordInput: TextComponent;
+    new Setting(detailsEl)
+      .setName("Encryption password")
+      .setDesc(
+        "All files are encrypted with this password before uploading. " +
+          "There is no way to recover data if you forget this password.",
+      )
+      .addButton((button) =>
+        button.setIcon("eye-off").onClick(() => {
+          if (passwordInput.inputEl.type === "password") {
+            passwordInput.inputEl.type = "text";
+            button.setIcon("eye");
+          } else {
+            passwordInput.inputEl.type = "password";
+            button.setIcon("eye-off");
+          }
+        }),
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("Password")
+          .setValue(profile.encryptionPassword)
+          .onChange(async (value) => {
+            profile.encryptionPassword = value;
+            await this.plugin.saveSettings();
+            if (value) {
+              const manager = this.plugin.getSyncManager(profile.id);
+              if (manager) {
+                await manager.initCryptoKey();
+              }
+            }
+          }).inputEl.type = "password";
+        passwordInput = text;
+      });
+
+    // Reorder + Delete buttons
+    const actionSetting = new Setting(detailsEl);
+
+    if (index > 0) {
+      actionSetting.addButton((button) =>
+        button.setIcon("arrow-up").onClick(async () => {
+          profiles.splice(index, 1);
+          profiles.splice(index - 1, 0, profile);
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+      );
+    }
+    if (index < profiles.length - 1) {
+      actionSetting.addButton((button) =>
+        button.setIcon("arrow-down").onClick(async () => {
+          profiles.splice(index, 1);
+          profiles.splice(index + 1, 0, profile);
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+      );
+    }
+
+    actionSetting.addButton((button) =>
+      button
+        .setButtonText("Delete profile")
+        .setWarning()
+        .onClick(async () => {
+          const modal = new Modal(this.plugin.app);
+          modal.setTitle("Delete profile?");
+          modal.setContent(
+            `This will remove the profile "${profile.name}" and its metadata.`,
+          );
+          new Setting(modal.contentEl)
+            .addButton((btn) =>
+              btn
+                .setButtonText("Delete")
+                .setWarning()
+                .onClick(async () => {
+                  profiles.splice(index, 1);
+                  await this.plugin.saveSettings();
+                  await this.plugin.initSyncManagers();
+                  modal.close();
+                  this.display();
+                }),
+            )
+            .addButton((btn) =>
+              btn.setButtonText("Cancel").onClick(() => {
+                modal.close();
+              }),
+            );
+          modal.open();
+        }),
+    );
   }
 }

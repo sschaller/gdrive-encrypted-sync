@@ -50,10 +50,17 @@ export default class MetadataStore {
   private metadataFile: string;
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(private vault: Vault) {
+  constructor(private vault: Vault, profileId?: string) {
+    const fileName = profileId
+      ? `gdrive-sync-metadata-${profileId}.json`
+      : MANIFEST_FILE_NAME;
     this.metadataFile = normalizePath(
-      `${this.vault.configDir}/${MANIFEST_FILE_NAME}`,
+      `${this.vault.configDir}/${fileName}`,
     );
+  }
+
+  get fileName(): string {
+    return this.metadataFile.split("/").pop() || MANIFEST_FILE_NAME;
   }
 
   /**

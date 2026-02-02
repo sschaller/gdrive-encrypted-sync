@@ -5,7 +5,7 @@ import {
   normalizePath,
   Notice,
 } from "obsidian";
-import { GDriveSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
+import { GDriveSyncSettings, SyncProfile, DEFAULT_SETTINGS } from "./settings/settings";
 import GDriveSyncSettingsTab from "./settings/tab";
 import SyncManager, { ConflictFile, ConflictResolution } from "./sync-manager";
 import Logger from "./logger";
@@ -22,10 +22,12 @@ import {
   exchangeCodeForTokens,
   startLoopbackServer,
 } from "./gdrive/oauth";
+import EventsListener from "./events-listener";
 
 export default class GDriveSyncPlugin extends Plugin {
   settings: GDriveSyncSettings;
-  syncManager: SyncManager;
+  syncManagers: Map<string, SyncManager> = new Map();
+  eventsListener: EventsListener;
   logger: Logger;
 
   statusBarItem: HTMLElement | null = null;
@@ -50,11 +52,16 @@ export default class GDriveSyncPlugin extends Plugin {
   private conflicts: ConflictFile[] = [];
   private oauthServer: Server | null = null;
 
+  /** Helper to get the first profile's sync manager (for backwards compat in settings UI) */
+  getSyncManager(profileId: string): SyncManager | undefined {
+    return this.syncManagers.get(profileId);
+  }
+
   async onUserEnable() {
-    if (
-      this.settings.encryptionPassword === "" ||
-      this.settings.googleRefreshToken === ""
-    ) {
+    const unconfigured = this.settings.profiles.some(
+      (p) => p.encryptionPassword === "" || p.googleRefreshToken === "",
+    );
+    if (unconfigured) {
       new Notice("Go to settings to configure syncing");
     }
   }
@@ -98,17 +105,7 @@ export default class GDriveSyncPlugin extends Plugin {
 
     this.addSettingTab(new GDriveSyncSettingsTab(this.app, this));
 
-    this.syncManager = new SyncManager(
-      this.app.vault,
-      this.settings,
-      this.onConflicts.bind(this),
-      this.logger,
-    );
-    await this.syncManager.loadMetadata();
-
-    if (this.settings.encryptionPassword) {
-      await this.syncManager.initCryptoKey();
-    }
+    await this.initSyncManagers();
 
     if (this.settings.syncStrategy == "interval") {
       this.restartSyncInterval();
@@ -119,7 +116,7 @@ export default class GDriveSyncPlugin extends Plugin {
       // getting spammed with create events.
       // See the official Obsidian docs:
       // https://docs.obsidian.md/Reference/TypeScript+API/Vault/on('create')
-      this.syncManager.startEventsListener(this);
+      this.eventsListener.start(this);
 
       // Load the ribbons after layout is ready so they're shown after the core
       // buttons
@@ -153,7 +150,48 @@ export default class GDriveSyncPlugin extends Plugin {
     });
   }
 
-  async startOAuthFlow() {
+  async initSyncManagers() {
+    this.syncManagers.clear();
+
+    for (const profile of this.settings.profiles) {
+      const manager = new SyncManager(
+        this.app.vault,
+        this.settings,
+        profile,
+        this.onConflicts.bind(this),
+        this.logger,
+      );
+      await manager.loadMetadata();
+      if (profile.encryptionPassword) {
+        await manager.initCryptoKey();
+      }
+      this.syncManagers.set(profile.id, manager);
+    }
+
+    const entries = this.settings.profiles.map((profile) => ({
+      profile,
+      metadataStore: this.syncManagers.get(profile.id)!.metadataStore,
+    }));
+
+    if (this.eventsListener) {
+      this.eventsListener.updateEntries(entries);
+    } else {
+      this.eventsListener = new EventsListener(
+        this.app.vault,
+        entries,
+        this.settings,
+        this.logger,
+      );
+    }
+  }
+
+  async startOAuthFlow(profileId: string) {
+    const profile = this.settings.profiles.find((p) => p.id === profileId);
+    if (!profile) {
+      new Notice("Profile not found");
+      return;
+    }
+
     if (!this.settings.googleClientId) {
       new Notice("Set Google Client ID first");
       return;
@@ -184,13 +222,13 @@ export default class GDriveSyncPlugin extends Plugin {
         codeVerifier,
         redirectUri,
       );
-      this.settings.googleAccessToken = tokens.access_token;
-      this.settings.googleRefreshToken =
-        tokens.refresh_token || this.settings.googleRefreshToken;
-      this.settings.googleTokenExpiry =
+      profile.googleAccessToken = tokens.access_token;
+      profile.googleRefreshToken =
+        tokens.refresh_token || profile.googleRefreshToken;
+      profile.googleTokenExpiry =
         Date.now() + tokens.expires_in * 1000;
       await this.saveSettings();
-      new Notice("Connected to Google Drive");
+      new Notice(`Connected profile "${profile.name}" to Google Drive`);
     } catch (err) {
       new Notice(`OAuth failed: ${err}`);
     } finally {
@@ -199,34 +237,45 @@ export default class GDriveSyncPlugin extends Plugin {
   }
 
   async sync() {
-    if (
-      this.settings.encryptionPassword === "" ||
-      this.settings.googleRefreshToken === ""
-    ) {
+    const configuredProfiles = this.settings.profiles.filter(
+      (p) => p.encryptionPassword !== "" && p.googleRefreshToken !== "",
+    );
+    if (configuredProfiles.length === 0) {
       new Notice("Sync plugin not configured");
       return;
     }
-    this.syncManager.onProgress = (current, total) => {
-      this.statusBarItem?.setText(`GDrive: Syncing ${current}/${total}`);
-    };
-    if (this.settings.firstSync) {
-      const notice = new Notice("Syncing...");
-      try {
-        await this.syncManager.firstSync();
-        this.settings.firstSync = false;
-        this.saveSettings();
-        // Shown only if sync doesn't fail
-        new Notice("Sync successful", 5000);
-      } catch (err) {
-        // Show the error to the user, it's not automatically dismissed to make sure
-        // the user sees it.
-        new Notice(`Error syncing. ${err}`);
+
+    for (const profile of configuredProfiles) {
+      const manager = this.syncManagers.get(profile.id);
+      if (!manager) continue;
+
+      manager.onProgress = (current, total) => {
+        this.statusBarItem?.setText(
+          `GDrive: Syncing "${profile.name}" ${current}/${total}`,
+        );
+      };
+
+      if (profile.firstSync) {
+        const notice = new Notice(`Syncing "${profile.name}"...`);
+        try {
+          await manager.firstSync();
+          profile.firstSync = false;
+          this.saveSettings();
+          // Shown only if sync doesn't fail
+          new Notice(`Sync "${profile.name}" successful`, 5000);
+        } catch (err) {
+          // Show the error to the user, it's not automatically dismissed to make sure
+          // the user sees it.
+          new Notice(`Error syncing "${profile.name}". ${err}`);
+        }
+        notice.hide();
+      } else {
+        await manager.sync();
       }
-      notice.hide();
-    } else {
-      await this.syncManager.sync();
+
+      manager.onProgress = undefined;
     }
-    this.syncManager.onProgress = undefined;
+
     this.updateStatusBarItem();
   }
 
@@ -277,13 +326,20 @@ export default class GDriveSyncPlugin extends Plugin {
     }
 
     let state = "Unknown";
-    const fileData = this.syncManager.getFileMetadata(activeFile.path);
-    if (!fileData) {
+    // Check across all managers
+    for (const manager of this.syncManagers.values()) {
+      const fileData = manager.getFileMetadata(activeFile.path);
+      if (fileData) {
+        if (fileData.dirty) {
+          state = "Outdated";
+        } else {
+          state = "Up to date";
+        }
+        break;
+      }
+    }
+    if (state === "Unknown") {
       state = "Untracked";
-    } else if (fileData.dirty) {
-      state = "Outdated";
-    } else if (!fileData.dirty) {
-      state = "Up to date";
     }
 
     this.statusBarItem.setText(`GDrive: ${state}`);
@@ -346,24 +402,37 @@ export default class GDriveSyncPlugin extends Plugin {
   // Proxy methods from sync manager to ease handling the interval
   // when settings are changed
   startSyncInterval() {
-    const intervalID = this.syncManager.startSyncInterval(
-      this.settings.syncInterval,
-    );
-    this.registerInterval(intervalID);
+    for (const manager of this.syncManagers.values()) {
+      try {
+        const intervalID = manager.startSyncInterval(
+          this.settings.syncInterval,
+        );
+        this.registerInterval(intervalID);
+      } catch {
+        // Already running
+      }
+    }
   }
 
   stopSyncInterval() {
-    this.syncManager.stopSyncInterval();
+    for (const manager of this.syncManagers.values()) {
+      manager.stopSyncInterval();
+    }
   }
 
   restartSyncInterval() {
-    this.syncManager.stopSyncInterval();
-    this.syncManager.startSyncInterval(this.settings.syncInterval);
+    for (const manager of this.syncManagers.values()) {
+      manager.stopSyncInterval();
+      manager.startSyncInterval(this.settings.syncInterval);
+    }
   }
 
   async reset() {
-    this.settings = DEFAULT_SETTINGS;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS);
     this.saveSettings();
-    await this.syncManager.resetMetadata();
+    for (const manager of this.syncManagers.values()) {
+      await manager.resetMetadata();
+    }
+    this.syncManagers.clear();
   }
 }

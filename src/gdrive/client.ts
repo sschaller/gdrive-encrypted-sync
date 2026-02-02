@@ -1,5 +1,5 @@
 import { requestUrl } from "obsidian";
-import { GDriveSyncSettings } from "../settings/settings";
+import { SyncProfile, GDriveSyncSettings } from "../settings/settings";
 import { refreshAccessToken } from "./oauth";
 import Logger from "../logger";
 import { retryUntil } from "../utils";
@@ -25,31 +25,32 @@ class DriveAPIError extends Error {
 export default class GDriveClient {
   constructor(
     private settings: GDriveSyncSettings,
+    private profile: SyncProfile,
     private logger: Logger,
   ) {}
 
   private async ensureAccessToken(): Promise<void> {
     if (
-      this.settings.googleAccessToken &&
-      this.settings.googleTokenExpiry > Date.now()
+      this.profile.googleAccessToken &&
+      this.profile.googleTokenExpiry > Date.now()
     ) {
       return;
     }
-    if (!this.settings.googleRefreshToken) {
+    if (!this.profile.googleRefreshToken) {
       throw new Error("Not authenticated with Google Drive");
     }
     const tokens = await refreshAccessToken(
       this.settings.googleClientId,
       this.settings.googleClientSecret,
-      this.settings.googleRefreshToken,
+      this.profile.googleRefreshToken,
     );
-    this.settings.googleAccessToken = tokens.access_token;
-    this.settings.googleTokenExpiry = Date.now() + tokens.expires_in * 1000;
+    this.profile.googleAccessToken = tokens.access_token;
+    this.profile.googleTokenExpiry = Date.now() + tokens.expires_in * 1000;
   }
 
   private headers(): Record<string, string> {
     return {
-      Authorization: `Bearer ${this.settings.googleAccessToken}`,
+      Authorization: `Bearer ${this.profile.googleAccessToken}`,
     };
   }
 

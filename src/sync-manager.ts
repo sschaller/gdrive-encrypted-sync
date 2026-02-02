@@ -6,7 +6,7 @@ import MetadataStore, {
   MANIFEST_FILE_NAME,
 } from "./metadata-store";
 import EventsListener from "./events-listener";
-import { GDriveSyncSettings } from "./settings/settings";
+import { GDriveSyncSettings, SyncProfile } from "./settings/settings";
 import Logger, { LOG_FILE_NAME } from "./logger";
 import { hasTextExtension } from "./utils";
 import GDriveSyncPlugin from "./main";
@@ -44,9 +44,8 @@ type OnConflictsCallback = (
 ) => Promise<ConflictResolution[]>;
 
 export default class SyncManager {
-  private metadataStore: MetadataStore;
+  metadataStore: MetadataStore;
   private client: GDriveClient;
-  private eventsListener: EventsListener;
   private syncIntervalId: number | null = null;
 
   // Use to track if syncing is in progress, this ideally
@@ -59,21 +58,37 @@ export default class SyncManager {
   constructor(
     private vault: Vault,
     private settings: GDriveSyncSettings,
+    private profile: SyncProfile,
     private onConflicts: OnConflictsCallback,
     private logger: Logger,
   ) {
-    this.metadataStore = new MetadataStore(this.vault);
-    this.client = new GDriveClient(this.settings, this.logger);
-    this.eventsListener = new EventsListener(
-      this.vault,
-      this.metadataStore,
-      this.settings,
-      this.logger,
-    );
+    this.metadataStore = new MetadataStore(this.vault, this.profile.id);
+    this.client = new GDriveClient(this.settings, this.profile, this.logger);
+  }
+
+  /** Convert a metadata-relative path to a vault-absolute path */
+  private toVaultPath(metaPath: string): string {
+    if (!this.profile.localFolder) return metaPath;
+    return `${this.profile.localFolder}/${metaPath}`;
+  }
+
+  /** Convert a vault-absolute path to a metadata-relative path */
+  private toMetaPath(vaultPath: string): string {
+    if (!this.profile.localFolder) return vaultPath;
+    if (vaultPath.startsWith(this.profile.localFolder + "/")) {
+      return vaultPath.slice(this.profile.localFolder.length + 1);
+    }
+    return vaultPath;
+  }
+
+  /** Check if a vault path is within this profile's scope */
+  private isInScope(vaultPath: string): boolean {
+    if (!this.profile.localFolder) return true;
+    return vaultPath.startsWith(this.profile.localFolder + "/") || vaultPath === this.profile.localFolder;
   }
 
   async initCryptoKey(): Promise<void> {
-    if (!this.settings.encryptionPassword) {
+    if (!this.profile.encryptionPassword) {
       this.cryptoKey = null;
       return;
     }
@@ -91,17 +106,20 @@ export default class SyncManager {
       );
       await this.metadataStore.save();
     }
-    this.cryptoKey = await deriveKey(this.settings.encryptionPassword, salt);
+    this.cryptoKey = await deriveKey(this.profile.encryptionPassword, salt);
   }
 
   /**
    * Returns true if the local vault root is empty.
    */
   private async vaultIsEmpty(): Promise<boolean> {
-    const { files, folders } = await this.vault.adapter.list(
-      this.vault.getRoot().path,
-    );
-    // There are files or folders in the vault dir
+    const rootPath = this.profile.localFolder || this.vault.getRoot().path;
+    if (this.profile.localFolder) {
+      if (!(await this.vault.adapter.exists(rootPath))) {
+        return true;
+      }
+    }
+    const { files, folders } = await this.vault.adapter.list(rootPath);
     return (
       files.length === 0 ||
       // We filter out the config dir since is always present so it's fine if we find it.
@@ -139,9 +157,9 @@ export default class SyncManager {
 
     // Find or create sync folder
     const folderId = await this.client.findOrCreateSyncFolder(
-      this.settings.driveFolderName,
+      this.profile.driveFolderName,
     );
-    this.settings.driveFolderId = folderId;
+    this.profile.driveFolderId = folderId;
     this.metadataStore.data.driveFolderId = folderId;
 
     const driveFiles = await this.client.listFiles(folderId);
@@ -184,10 +202,12 @@ export default class SyncManager {
 
     for (let i = 0; i < filePaths.length; i++) {
       const filePath = filePaths[i];
-      if (filePath === `${this.vault.configDir}/${MANIFEST_FILE_NAME}`) {
+      const metaFileName = this.metadataStore.fileName;
+      if (filePath === `${this.vault.configDir}/${metaFileName}`) {
         continue;
       }
-      const normalizedPath = normalizePath(filePath);
+      const vaultPath = this.toVaultPath(filePath);
+      const normalizedPath = normalizePath(vaultPath);
       const content = await this.vault.adapter.readBinary(normalizedPath);
       const contentHash = await computeContentHash(content);
       const encrypted = await encryptContent(content, this.cryptoKey!);
@@ -240,7 +260,7 @@ export default class SyncManager {
     const manifestEncrypted = manifestBytes.slice(SALT_LENGTH).buffer as ArrayBuffer;
 
     // Re-derive key with the remote salt before decrypting
-    this.cryptoKey = await deriveKey(this.settings.encryptionPassword, remoteSalt);
+    this.cryptoKey = await deriveKey(this.profile.encryptionPassword, remoteSalt);
     this.metadataStore.data.encryptionSalt = btoa(
       String.fromCharCode(...remoteSalt),
     );
@@ -267,10 +287,11 @@ export default class SyncManager {
     }
 
     // Download and decrypt each file
+    const metaFileName = this.metadataStore.fileName;
     const remoteEntries = Object.entries(remoteMetadata.files);
     for (let i = 0; i < remoteEntries.length; i++) {
       const [filePath, fileMeta] = remoteEntries[i];
-      if (filePath === `${this.vault.configDir}/${MANIFEST_FILE_NAME}`) {
+      if (filePath === `${this.vault.configDir}/${metaFileName}`) {
         continue;
       }
       if (fileMeta.deleted) {
@@ -288,7 +309,8 @@ export default class SyncManager {
       const encrypted = await this.client.downloadFile(driveFile.id);
       const decrypted = await decryptContent(encrypted, this.cryptoKey!);
 
-      const normalizedPath = normalizePath(filePath);
+      const vaultPath = this.toVaultPath(filePath);
+      const normalizedPath = normalizePath(vaultPath);
       const fileFolder = normalizePath(
         normalizedPath.split("/").slice(0, -1).join("/"),
       );
@@ -453,7 +475,8 @@ export default class SyncManager {
       const action = actions[i];
       switch (action.type) {
         case "upload": {
-          const normalizedPath = normalizePath(action.filePath);
+          const vaultPath = this.toVaultPath(action.filePath);
+          const normalizedPath = normalizePath(vaultPath);
           const resolution = conflictResolutions.find(
             (c) => c.filePath === action.filePath,
           );
@@ -518,7 +541,8 @@ export default class SyncManager {
           const encrypted = await this.client.downloadFile(driveFile.id);
           const decrypted = await decryptContent(encrypted, this.cryptoKey!);
 
-          const normalizedPath = normalizePath(action.filePath);
+          const vaultPath = this.toVaultPath(action.filePath);
+          const normalizedPath = normalizePath(vaultPath);
           const fileFolder = normalizePath(
             normalizedPath.split("/").slice(0, -1).join("/"),
           );
@@ -543,7 +567,8 @@ export default class SyncManager {
           break;
         }
         case "delete_local": {
-          const normalizedPath = normalizePath(action.filePath);
+          const vaultPath = this.toVaultPath(action.filePath);
+          const normalizedPath = normalizePath(vaultPath);
           if (await this.vault.adapter.exists(normalizedPath)) {
             await this.vault.adapter.remove(normalizedPath);
           }
@@ -568,7 +593,8 @@ export default class SyncManager {
 
     // Write conflict resolutions to local files
     for (const resolution of conflictResolutions) {
-      await this.vault.adapter.write(resolution.filePath, resolution.content);
+      const vaultPath = this.toVaultPath(resolution.filePath);
+      await this.vault.adapter.write(vaultPath, resolution.content);
       this.metadataStore.data.files[resolution.filePath].lastModified =
         Date.now();
     }
@@ -591,9 +617,10 @@ export default class SyncManager {
       return [];
     }
 
+    const metaFileName = this.metadataStore.fileName;
     const conflicts = await Promise.all(
       commonFiles.map(async (filePath: string) => {
-        if (filePath === `${this.vault.configDir}/${MANIFEST_FILE_NAME}`) {
+        if (filePath === `${this.vault.configDir}/${metaFileName}`) {
           // The manifest file is only internal, the user must not
           // handle conflicts for this
           return null;
@@ -638,8 +665,9 @@ export default class SyncManager {
           remoteContent = new TextDecoder().decode(decrypted);
         }
 
+        const vaultPath = this.toVaultPath(filePath);
         const localContent = await this.vault.adapter.read(
-          normalizePath(filePath),
+          normalizePath(vaultPath),
         );
         return { filePath, remoteContent, localContent };
       }),
@@ -662,6 +690,7 @@ export default class SyncManager {
   ) {
     let actions: SyncAction[] = [];
 
+    const metaFileName = this.metadataStore.fileName;
     const commonFiles = Object.keys(remoteFiles)
       .filter((filePath) => filePath in localFiles)
       // Remove conflicting files, we determine their actions in a different way
@@ -670,7 +699,7 @@ export default class SyncManager {
     // Get diff for common files
     await Promise.all(
       commonFiles.map(async (filePath: string) => {
-        if (filePath === `${this.vault.configDir}/${MANIFEST_FILE_NAME}`) {
+        if (filePath === `${this.vault.configDir}/${metaFileName}`) {
           // The manifest file must never trigger any action
           return;
         }
@@ -768,7 +797,7 @@ export default class SyncManager {
       return actions.filter((action: SyncAction) => {
         return (
           !action.filePath.startsWith(this.vault.configDir) ||
-          action.filePath === `${this.vault.configDir}/${MANIFEST_FILE_NAME}`
+          action.filePath === `${this.vault.configDir}/${metaFileName}`
         );
       });
     }
@@ -782,13 +811,15 @@ export default class SyncManager {
    * @returns String containing the file content hash or null in case the file doesn't exist
    */
   async calculateContentHash(filePath: string): Promise<string | null> {
-    if (!(await this.vault.adapter.exists(filePath))) {
+    const vaultPath = this.toVaultPath(filePath);
+    if (!(await this.vault.adapter.exists(vaultPath))) {
       // The file doesn't exist, can't calculate any hash
       return null;
     }
-    const content = await this.vault.adapter.readBinary(filePath);
+    const content = await this.vault.adapter.readBinary(vaultPath);
     return computeContentHash(content);
   }
+
   /**
    * Finalizes the sync by encrypting and uploading the metadata manifest
    * to the remote Drive folder.
@@ -845,7 +876,14 @@ export default class SyncManager {
     if (Object.keys(this.metadataStore.data.files).length === 0) {
       await this.logger.info("Metadata was empty, loading all files");
       let files: string[] = [];
-      let folders = [this.vault.getRoot().path];
+      const rootPath = this.profile.localFolder || this.vault.getRoot().path;
+      let folders = [rootPath];
+
+      if (this.profile.localFolder && !(await this.vault.adapter.exists(rootPath))) {
+        // Local folder doesn't exist yet, nothing to enumerate
+        folders = [];
+      }
+
       while (folders.length > 0) {
         const folder = folders.pop();
         if (folder === undefined) continue;
@@ -864,8 +902,9 @@ export default class SyncManager {
           return;
         }
 
-        this.metadataStore.data.files[filePath] = {
-          path: filePath,
+        const metaPath = this.toMetaPath(filePath);
+        this.metadataStore.data.files[metaPath] = {
+          path: metaPath,
           contentHash: null,
           dirty: false,
           justDownloaded: false,
@@ -877,10 +916,11 @@ export default class SyncManager {
 
       // Must be the first time we run, initialize the metadata store
       // with itself and all files in the vault.
+      const metaFileName = this.metadataStore.fileName;
       this.metadataStore.data.files[
-        `${this.vault.configDir}/${MANIFEST_FILE_NAME}`
+        `${this.vault.configDir}/${metaFileName}`
       ] = {
-        path: `${this.vault.configDir}/${MANIFEST_FILE_NAME}`,
+        path: `${this.vault.configDir}/${metaFileName}`,
         contentHash: null,
         dirty: false,
         justDownloaded: false,
@@ -914,8 +954,9 @@ export default class SyncManager {
     }
     // Add them to the metadata store
     files.forEach((filePath: string) => {
-      this.metadataStore.data.files[filePath] = {
-        path: filePath,
+      const metaPath = this.toMetaPath(filePath);
+      this.metadataStore.data.files[metaPath] = {
+        path: metaPath,
         contentHash: null,
         dirty: false,
         justDownloaded: false,
@@ -950,22 +991,21 @@ export default class SyncManager {
     }
 
     // Remove all them from the metadata store
+    const metaFileName = this.metadataStore.fileName;
     files.forEach((filePath: string) => {
-      if (filePath === `${this.vault.configDir}/${MANIFEST_FILE_NAME}`) {
+      if (filePath === `${this.vault.configDir}/${metaFileName}`) {
         // We don't want to remove the metadata file even if it's in the config dir
         return;
       }
-      delete this.metadataStore.data.files[filePath];
+      const metaPath = this.toMetaPath(filePath);
+      delete this.metadataStore.data.files[metaPath];
     });
     this.metadataStore.save();
   }
 
   getFileMetadata(filePath: string): FileMetadata {
-    return this.metadataStore.data.files[filePath];
-  }
-
-  startEventsListener(plugin: GDriveSyncPlugin) {
-    this.eventsListener.start(plugin);
+    const metaPath = this.toMetaPath(filePath);
+    return this.metadataStore.data.files[metaPath];
   }
 
   /**
