@@ -2,6 +2,51 @@
     display: none;
 }
 
+.gdrive-sync-profile-item .setting-item-control {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.gdrive-sync-profile-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.gdrive-sync-profile-row label {
+    flex-shrink: 0;
+    min-width: 130px;
+    font-size: var(--font-ui-small);
+    color: var(--text-muted);
+}
+
+.gdrive-sync-profile-row input[type="text"],
+.gdrive-sync-profile-row input[type="password"] {
+    flex: 1;
+    min-width: 0;
+}
+
+.gdrive-sync-profile-password {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    gap: 4px;
+}
+
+.gdrive-sync-profile-password input {
+    flex: 1;
+    min-width: 0;
+}
+
+.gdrive-sync-profile-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+}
+
 .padless-conflicts-view-container {
     padding: 0;
     height: 100%;

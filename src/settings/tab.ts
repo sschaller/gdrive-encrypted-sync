@@ -5,6 +5,7 @@ import {
   TextComponent,
   Modal,
   Notice,
+  setIcon,
 } from "obsidian";
 import GDriveSyncPlugin from "src/main";
 import { copyToClipboard } from "src/utils";
@@ -345,175 +346,169 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
     index: number,
   ) {
     const profiles = this.plugin.settings.profiles;
-    const detailsEl = containerEl.createEl("details", {
-      cls: "gdrive-sync-profile",
-    });
-    const summaryEl = detailsEl.createEl("summary");
-    summaryEl.setText(profile.name || `Profile ${index + 1}`);
 
-    // Profile name
-    new Setting(detailsEl)
-      .setName("Profile name")
-      .addText((text) =>
-        text
-          .setPlaceholder("My Profile")
-          .setValue(profile.name)
-          .onChange(async (value) => {
-            profile.name = value;
-            summaryEl.setText(value || `Profile ${index + 1}`);
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    // Local folder
-    new Setting(detailsEl)
-      .setName("Local folder")
-      .setDesc("Leave empty to sync the whole vault, or set a subfolder path")
-      .addText((text) =>
-        text
-          .setPlaceholder("e.g. some/folder")
-          .setValue(profile.localFolder)
-          .onChange(async (value) => {
-            profile.localFolder = value;
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    // Connection status
+    // Single setting with all profile controls stacked vertically
     const connectionStatus = profile.googleRefreshToken
       ? "Connected"
       : "Not connected";
 
-    const connectSetting = new Setting(detailsEl)
-      .setName("Connection status")
+    const setting = new Setting(containerEl)
+      .setClass("gdrive-sync-profile-item")
+      .setName(profile.name || `Profile ${index + 1}`)
       .setDesc(connectionStatus);
 
-    if (profile.googleRefreshToken) {
-      connectSetting.addButton((button) =>
-        button.setButtonText("Disconnect").onClick(async () => {
-          profile.googleRefreshToken = "";
-          profile.googleAccessToken = "";
-          profile.googleTokenExpiry = 0;
-          await this.plugin.saveSettings();
-          this.display();
-        }),
-      );
-    } else {
-      connectSetting.addButton((button) =>
-        button
-          .setButtonText("Connect")
-          .setCta()
-          .onClick(async () => {
-            await this.plugin.startOAuthFlow(profile.id);
-            this.display();
-          }),
-      );
+    const ctrl = setting.controlEl;
+
+    // Profile name
+    const nameRow = ctrl.createDiv({ cls: "gdrive-sync-profile-row" });
+    nameRow.createEl("label", { text: "Profile name" });
+    const nameInput = nameRow.createEl("input", {
+      type: "text",
+      placeholder: "My Profile",
+      value: profile.name,
+    });
+    nameInput.addEventListener("input", async () => {
+      profile.name = nameInput.value;
+      setting.setName(nameInput.value || `Profile ${index + 1}`);
+      await this.plugin.saveSettings();
+    });
+
+    // Local folder
+    const folderRow = ctrl.createDiv({ cls: "gdrive-sync-profile-row" });
+    folderRow.createEl("label", { text: "Local folder" });
+    const folderInput = folderRow.createEl("input", {
+      type: "text",
+      placeholder: "e.g. some/folder",
+      value: profile.localFolder,
+    });
+    folderInput.addEventListener("input", async () => {
+      profile.localFolder = folderInput.value;
+      await this.plugin.saveSettings();
+    });
+
+    // Connection
+    const connectRow = ctrl.createDiv({ cls: "gdrive-sync-profile-row" });
+    connectRow.createEl("label", { text: "Connection" });
+    const connectBtn = connectRow.createEl("button", {
+      text: profile.googleRefreshToken ? "Disconnect" : "Connect",
+    });
+    if (!profile.googleRefreshToken) {
+      connectBtn.addClass("mod-cta");
     }
+    connectBtn.addEventListener("click", async () => {
+      if (profile.googleRefreshToken) {
+        profile.googleRefreshToken = "";
+        profile.googleAccessToken = "";
+        profile.googleTokenExpiry = 0;
+        await this.plugin.saveSettings();
+      } else {
+        await this.plugin.startOAuthFlow(profile.id);
+      }
+      this.display();
+    });
 
     // Drive folder name
-    new Setting(detailsEl)
-      .setName("Drive folder name")
-      .setDesc("Name of the folder in Google Drive to sync to")
-      .addText((text) =>
-        text
-          .setPlaceholder("ObsidianSync")
-          .setValue(profile.driveFolderName)
-          .onChange(async (value) => {
-            profile.driveFolderName = value || "ObsidianSync";
-            await this.plugin.saveSettings();
-          }),
-      );
+    const driveRow = ctrl.createDiv({ cls: "gdrive-sync-profile-row" });
+    driveRow.createEl("label", { text: "Drive folder name" });
+    const driveInput = driveRow.createEl("input", {
+      type: "text",
+      placeholder: "ObsidianSync",
+      value: profile.driveFolderName,
+    });
+    driveInput.addEventListener("input", async () => {
+      profile.driveFolderName = driveInput.value || "ObsidianSync";
+      await this.plugin.saveSettings();
+    });
 
     // Encryption password
-    let passwordInput: TextComponent;
-    new Setting(detailsEl)
-      .setName("Encryption password")
-      .setDesc(
-        "All files are encrypted with this password before uploading. " +
-          "There is no way to recover data if you forget this password.",
-      )
-      .addButton((button) =>
-        button.setIcon("eye-off").onClick(() => {
-          if (passwordInput.inputEl.type === "password") {
-            passwordInput.inputEl.type = "text";
-            button.setIcon("eye");
-          } else {
-            passwordInput.inputEl.type = "password";
-            button.setIcon("eye-off");
-          }
-        }),
-      )
-      .addText((text) => {
-        text
-          .setPlaceholder("Password")
-          .setValue(profile.encryptionPassword)
-          .onChange(async (value) => {
-            profile.encryptionPassword = value;
-            await this.plugin.saveSettings();
-            if (value) {
-              const manager = this.plugin.getSyncManager(profile.id);
-              if (manager) {
-                await manager.initCryptoKey();
-              }
-            }
-          }).inputEl.type = "password";
-        passwordInput = text;
-      });
+    const passRow = ctrl.createDiv({ cls: "gdrive-sync-profile-row" });
+    passRow.createEl("label", { text: "Encryption password" });
+    const passContainer = passRow.createDiv({
+      cls: "gdrive-sync-profile-password",
+    });
+    const passInput = passContainer.createEl("input", {
+      type: "password",
+      placeholder: "Password",
+      value: profile.encryptionPassword,
+    });
+    const toggleBtn = passContainer.createEl("button");
+    toggleBtn.addClass("clickable-icon");
+    setIcon(toggleBtn, "eye-off");
+    toggleBtn.addEventListener("click", () => {
+      if (passInput.type === "password") {
+        passInput.type = "text";
+        setIcon(toggleBtn, "eye");
+      } else {
+        passInput.type = "password";
+        setIcon(toggleBtn, "eye-off");
+      }
+    });
+    passInput.addEventListener("input", async () => {
+      profile.encryptionPassword = passInput.value;
+      await this.plugin.saveSettings();
+      if (passInput.value) {
+        const manager = this.plugin.getSyncManager(profile.id);
+        if (manager) {
+          await manager.initCryptoKey();
+        }
+      }
+    });
 
     // Reorder + Delete buttons
-    const actionSetting = new Setting(detailsEl);
+    const actionRow = ctrl.createDiv({ cls: "gdrive-sync-profile-actions" });
 
     if (index > 0) {
-      actionSetting.addButton((button) =>
-        button.setIcon("arrow-up").onClick(async () => {
-          profiles.splice(index, 1);
-          profiles.splice(index - 1, 0, profile);
-          await this.plugin.saveSettings();
-          this.display();
-        }),
-      );
+      const upBtn = actionRow.createEl("button");
+      upBtn.addClass("clickable-icon");
+      setIcon(upBtn, "arrow-up");
+      upBtn.addEventListener("click", async () => {
+        profiles.splice(index, 1);
+        profiles.splice(index - 1, 0, profile);
+        await this.plugin.saveSettings();
+        this.display();
+      });
     }
     if (index < profiles.length - 1) {
-      actionSetting.addButton((button) =>
-        button.setIcon("arrow-down").onClick(async () => {
-          profiles.splice(index, 1);
-          profiles.splice(index + 1, 0, profile);
-          await this.plugin.saveSettings();
-          this.display();
-        }),
-      );
+      const downBtn = actionRow.createEl("button");
+      downBtn.addClass("clickable-icon");
+      setIcon(downBtn, "arrow-down");
+      downBtn.addEventListener("click", async () => {
+        profiles.splice(index, 1);
+        profiles.splice(index + 1, 0, profile);
+        await this.plugin.saveSettings();
+        this.display();
+      });
     }
 
-    actionSetting.addButton((button) =>
-      button
-        .setButtonText("Delete profile")
-        .setWarning()
-        .onClick(async () => {
-          const modal = new Modal(this.plugin.app);
-          modal.setTitle("Delete profile?");
-          modal.setContent(
-            `This will remove the profile "${profile.name}" and its metadata.`,
-          );
-          new Setting(modal.contentEl)
-            .addButton((btn) =>
-              btn
-                .setButtonText("Delete")
-                .setWarning()
-                .onClick(async () => {
-                  profiles.splice(index, 1);
-                  await this.plugin.saveSettings();
-                  await this.plugin.initSyncManagers();
-                  modal.close();
-                  this.display();
-                }),
-            )
-            .addButton((btn) =>
-              btn.setButtonText("Cancel").onClick(() => {
-                modal.close();
-              }),
-            );
-          modal.open();
-        }),
-    );
+    const deleteBtn = actionRow.createEl("button", {
+      text: "Delete profile",
+    });
+    deleteBtn.addClass("mod-warning");
+    deleteBtn.addEventListener("click", async () => {
+      const modal = new Modal(this.plugin.app);
+      modal.setTitle("Delete profile?");
+      modal.setContent(
+        `This will remove the profile "${profile.name}" and its metadata.`,
+      );
+      new Setting(modal.contentEl)
+        .addButton((btn) =>
+          btn
+            .setButtonText("Delete")
+            .setWarning()
+            .onClick(async () => {
+              profiles.splice(index, 1);
+              await this.plugin.saveSettings();
+              await this.plugin.initSyncManagers();
+              modal.close();
+              this.display();
+            }),
+        )
+        .addButton((btn) =>
+          btn.setButtonText("Cancel").onClick(() => {
+            modal.close();
+          }),
+        );
+      modal.open();
+    });
   }
 }
