@@ -1,28 +1,23 @@
-# GitHub Gitless Sync
+# Google Drive Encrypted Sync
 
-Plugin to sync a GitHub repository with an Obsidian vault.
+Plugin to sync an Obsidian vault to Google Drive with end-to-end encryption.
 
 I highly recommend not using this plugin with another sync service.
-This might create problems for this plugin when determining what needs to be synced between remote repository and local vault.
+This might create problems for this plugin when determining what needs to be synced between remote and local vault.
 
 ## Features
 
-These are the main features of the plugin:
-
 - Desktop and mobile support
-- Doesn't require `git`
-- Multiple vaults sync
+- Doesn't require any external tools
+- End-to-end encryption (AES-256-GCM with PBKDF2 key derivation)
+- Multiple sync profiles
 - Automatic sync on fixed interval
 - Manual sync
 - Conflict resolution view
 
-- Filtering by file type (TODO 🔨)
-
 ## Installation
 
-The plugin is available as a community plugin, you can easily search for it in Obsidian and install it from there.
-
-![Obsidian community plugin settings](./assets/install_instructions.png)
+Currently this plugin is not available in the Obsidian community plugins. You'll need to install it manually.
 
 ### Issues
 
@@ -30,45 +25,63 @@ If you find any problem please open an issue with as many details as possible.
 
 Please also provide logs if possible, you can copy them from the settings page. Remember to enable logging first.
 
-![Enable logging](./assets/logs_settings.png)
-
 ## Usage
 
 ### First sync
 
 > [!IMPORTANT]
-> The first sync will only work if either the remote repository or the local vault are completely **EMPTY**. If both contain files the first sync will fail.
+> The first sync will only work if either the remote folder or the local vault are completely **EMPTY**. If both contain files the first sync will fail.
 
-You must also configure the plugin settings before syncing.
+Before syncing, you need to set up Google Cloud OAuth credentials and configure the plugin.
 
-These settings are mandatory:
+#### Setting up Google Cloud credentials
 
-- Your GitHub Token (see below)
-- Repository owner
-- Repository name
-- Repository branch
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (or select an existing one)
+3. Enable the **Google Drive API**:
+   - Navigate to "APIs & Services" → "Library"
+   - Search for "Google Drive API" and enable it
+4. Configure the **OAuth consent screen** ("APIs & Services" → "OAuth consent screen"):
+   - Select "External" user type
+   - Fill in the app name and your email addresses
+   - Add the scope: `https://www.googleapis.com/auth/drive.file`
+   - Add yourself as a test user (required while the app is in "Testing" mode)
+5. Create **OAuth credentials**:
+   - Go to "APIs & Services" → "Credentials" ([direct link](https://console.cloud.google.com/apis/credentials))
+   - Click "Create Credentials" → "OAuth client ID"
+   - Select **Web application** as the application type
+   - Add an authorized redirect URI (see note below)
+   - Copy the **Client ID** and **Client Secret**
 
-If any of this is not set sync won't start.
+> [!NOTE]
+> The redirect URI must point to a hosted copy of `docs/oauth-redirect.html`. If you fork this repo and enable GitHub Pages, your redirect URI will be:
+> `https://YOUR_USERNAME.github.io/YOUR_REPO_NAME/oauth-redirect.html`
 
-### Token
+#### Plugin configuration
 
-A GitHub Fine-grained token is required to sync with your repository. You can create one by clicking [here](https://github.com/settings/personal-access-tokens/new).
-The token must have the `Contents` permission set to `Read and write` like in the screenshot below.
+Enter the following in the plugin settings:
 
-![GitHub Fine-grained token](./assets/token_permissions.png)
+- **Client ID** and **Client Secret** from Google Cloud
+- **Encryption password** — used to encrypt all files (keep this safe!)
+- **Sync folder name** — the folder that will be created in your Google Drive
 
-I also suggest creating the token with access only to your sync repo.
+### Encryption
+
+All files are encrypted locally before being uploaded to Google Drive:
+
+- **Content encryption**: Files are encrypted using AES-256-GCM
+- **Filename encryption**: Original filenames are encrypted and stored as base64-encoded `.enc` files
+- **Key derivation**: Your password is used with PBKDF2 (600,000 iterations) to derive the encryption key
+
+> [!CAUTION]
+> Keep your encryption password safe. If you lose it, you won't be able to decrypt your files.
 
 ### Sync modes
 
 You can always sync manually by clicking the sync button in the side ribbon.
 This will always work even if sync on interval is enabled.
 
-![Sync button](./assets/sync_button.png)
-
-If you don't want to see the button you can hide it, just check the plugin settings.
-
-The `Sync with GitHub` command is also available.
+The `Sync with Google Drive` command is also available.
 
 ### Conflict resolution
 
@@ -79,22 +92,12 @@ information to correctly resolve it.
 
 By default the split view will be used on desktop and the unified one on mobile, you can change the settings to always use the one you prefer.
 
-![Split conflict resolution](./assets/split_diff_view.png)
-![Unified conflict resolution](./assets/unified_diff_view.png)
-
 If you don't want to resolve them you can change the settings to always prefer either the remote or local version in case of conflicts.
 
 ### Config sync
 
-If you want to sync your vault configs with other vault you can enable that.
+If you want to sync your vault configs with other vaults you can enable that.
 It will sync the whole folder, that is `.obsidian` by default, including all plugins and themes.
-
-Note that the `.obsidian` folder will always be present, this happens because the plugin
-needs to store some metadata to correctly sync
-
-> [!CAUTION]
-> DO NOT sync configs if your remote repository is public.
-> That will expose the token you used to sync.
 
 ### Reset
 
@@ -106,36 +109,20 @@ That will completely wipe all the sync metadata so you'll have to repeat the fir
 
 ### What's different from other sync plugins?
 
-There are obviously other plugins that let you sync your vault with GitHub or other git hosts, like [`obsidian-git`](https://github.com/Vinzent03/obsidian-git) and [`Obsidian-GitHub-Sync`](https://github.com/kevinmkchin/Obsidian-GitHub-Sync) just to name a couple.
+This plugin syncs with Google Drive, and encrypts all data before uploading. Your files are stored as encrypted blobs on Google Drive, making them unreadable without your password.
 
-Most of those plugins though require the `git` executable to be present in your system, they might rely on Bash scripts too. This makes them much less portable, it's harder to use on Windows, and mobile is really unstable because most of the times they rely on [`isomorphic-git`](https://isomorphic-git.org/).
-
-This annoyed me because I wanted to have the same experience on every platform, and I wanted especially to support mobile.
-
-So I went a different way and chose to sync **only** with GitHub using their REST APIs, this means I don't rely in anyway on `git` being present in your system. This way I can easily support desktop and mobile with the same identical logic, and some small necessary differences in the UI for a better user experience.
-
-This obviously comes with some limitations. Since `git` is not used you can't interact with your repository locally in any way, and any `git` feature like branching, merging, or rebasing, are not available at all.
-
-Also since this relies only on the GitHub APIs you can only sync with GitHub and no other host.
+Unlike plugins that require external tools, this plugin uses Google Drive's REST API directly, making it portable across desktop and mobile with identical behavior.
 
 ### Can I use this with other sync plugins?
 
 No.
 
-To work correctly this plugin uses a custom metadata file that is updated every time we sync, if you commit changes outside the plugin that file is not updated properly.
-
-Other plugins don't know about that file, so if you sync with others too you risk losing data.
-
-## Contributing
-
-Contributions are obviously accepted.
-
-Bug fixes are always welcome, new feature must be discussed first. Open a [discussion](https://github.com/silvanocerza/github-gitless-sync/discussions) and let's talk in that case.
-
-Keep PRs as small as possible, I won't review PRs with hundreds of lines if it's mostly code.
-
-Low quality or vibe coded PRs are not welcome. Put some effort in it please.
+To work correctly this plugin uses a custom metadata file that is updated every time we sync. Other plugins don't know about that file, so if you sync with others too you risk losing data.
 
 ## License
 
 The project is licensed under the [AGPLv3](https://www.gnu.org/licenses/agpl-3.0.en.html) license.
+
+## Credits
+
+Based on [github-gitless-sync](https://github.com/silvanocerza/github-gitless-sync) by [Silvano Cerza](https://silvanocerza.com).

@@ -3,9 +3,7 @@
   "name": "Google Drive Encrypted Sync",
   "version": "1.0.0",
   "minAppVersion": "1.7.7",
-  "description": "Sync your Obsidian vault to Google Drive with AES-256-GCM encryption for both filenames and contents",
-  "author": "Silvano Cerza",
-  "authorUrl": "https://silvanocerza.com",
-  "fundingUrl": "https://ko-fi.com/silvanocerza",
+  "description": "Sync your Obsidian vault to Google Drive with end-to-end encryption.",
+  "author": "Sebastian Schaller",
   "isDesktopOnly": false
 }

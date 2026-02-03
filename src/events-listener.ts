@@ -99,7 +99,7 @@ export default class EventsListener {
     for (const entry of this.matchingEntries(filePath)) {
       const metaPath = this.toMetaPath(filePath, entry.profile);
       if (!this.isSyncable(filePath)) {
-        // The file was not in directory that we're syncing with GitHub
+        // The file was not in directory that we're syncing
         continue;
       }
       if (!entry.metadataStore.data.files[metaPath]) continue;
