@@ -31,7 +31,6 @@ export interface FileMetadata {
   // When the file was deleted
   deletedAt?: number | null;
   driveFileId: string | null;
-  obfuscatedName: string | null;
 }
 
 export interface Metadata {

@@ -13,14 +13,15 @@ import {
   ConflictsResolutionView,
   CONFLICTS_RESOLUTION_VIEW_TYPE,
 } from "./views/conflicts-resolution/view";
-import type { Server } from "http";
 import {
   generateCodeVerifier,
   generateCodeChallenge,
   generateState,
   buildAuthUrl,
   exchangeCodeForTokens,
-  startLoopbackServer,
+  waitForOAuthCode,
+  handleOAuthCallback,
+  OAUTH_REDIRECT_URI,
 } from "./gdrive/oauth";
 import EventsListener from "./events-listener";
 
@@ -50,7 +51,7 @@ export default class GDriveSyncPlugin extends Plugin {
   // and it gets destroyed.
   // By keeping them here we can recreate it easily.
   private conflicts: ConflictFile[] = [];
-  private oauthServer: Server | null = null;
+  private cancelOAuth: (() => void) | null = null;
 
   /** Helper to get the first profile's sync manager (for backwards compat in settings UI) */
   getSyncManager(profileId: string): SyncManager | undefined {
@@ -102,6 +103,10 @@ export default class GDriveSyncPlugin extends Plugin {
       CONFLICTS_RESOLUTION_VIEW_TYPE,
       (leaf) => new ConflictsResolutionView(leaf, this, this.conflicts),
     );
+
+    this.registerObsidianProtocolHandler("gdrive-encrypted-sync", (params) => {
+      handleOAuthCallback(params);
+    });
 
     this.addSettingTab(new GDriveSyncSettingsTab(this.app, this));
 
@@ -197,20 +202,19 @@ export default class GDriveSyncPlugin extends Plugin {
       return;
     }
 
-    // Kill any leftover server from a previous attempt
-    if (this.oauthServer) {
-      this.oauthServer.close();
-      this.oauthServer = null;
+    // Cancel any leftover flow from a previous attempt
+    if (this.cancelOAuth) {
+      this.cancelOAuth();
+      this.cancelOAuth = null;
     }
 
     const codeVerifier = generateCodeVerifier();
     const challenge = await generateCodeChallenge(codeVerifier);
     const state = generateState();
 
-    const { port, codePromise, server } = await startLoopbackServer(state);
-    this.oauthServer = server;
-    const redirectUri = `http://127.0.0.1:${port}`;
-    const url = buildAuthUrl(this.settings.googleClientId, challenge, redirectUri, state);
+    const { codePromise, cancel } = waitForOAuthCode(state);
+    this.cancelOAuth = cancel;
+    const url = buildAuthUrl(this.settings.googleClientId, challenge, OAUTH_REDIRECT_URI, state);
     window.open(url);
 
     try {
@@ -220,7 +224,7 @@ export default class GDriveSyncPlugin extends Plugin {
         this.settings.googleClientSecret,
         code,
         codeVerifier,
-        redirectUri,
+        OAUTH_REDIRECT_URI,
       );
       profile.googleAccessToken = tokens.access_token;
       profile.googleRefreshToken =
@@ -232,7 +236,7 @@ export default class GDriveSyncPlugin extends Plugin {
     } catch (err) {
       new Notice(`OAuth failed: ${err}`);
     } finally {
-      this.oauthServer = null;
+      this.cancelOAuth = null;
     }
   }
 
@@ -255,23 +259,14 @@ export default class GDriveSyncPlugin extends Plugin {
         );
       };
 
-      if (profile.firstSync) {
-        const notice = new Notice(`Syncing "${profile.name}"...`);
-        try {
-          await manager.firstSync();
-          profile.firstSync = false;
-          this.saveSettings();
-          // Shown only if sync doesn't fail
-          new Notice(`Sync "${profile.name}" successful`, 5000);
-        } catch (err) {
-          // Show the error to the user, it's not automatically dismissed to make sure
-          // the user sees it.
-          new Notice(`Error syncing "${profile.name}". ${err}`);
-        }
-        notice.hide();
-      } else {
+      const notice = new Notice(`Syncing "${profile.name}"...`);
+      try {
         await manager.sync();
+        new Notice(`Sync "${profile.name}" successful`, 5000);
+      } catch (err) {
+        new Notice(`Error syncing "${profile.name}". ${err}`);
       }
+      notice.hide();
 
       manager.onProgress = undefined;
     }
@@ -281,9 +276,9 @@ export default class GDriveSyncPlugin extends Plugin {
 
   async onunload() {
     this.stopSyncInterval();
-    if (this.oauthServer) {
-      this.oauthServer.close();
-      this.oauthServer = null;
+    if (this.cancelOAuth) {
+      this.cancelOAuth();
+      this.cancelOAuth = null;
     }
   }
 

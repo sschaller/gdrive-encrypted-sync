@@ -1,10 +1,9 @@
 import { requestUrl } from "obsidian";
-import * as http from "http";
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SCOPE = "https://www.googleapis.com/auth/drive.file";
-const LOOPBACK_HOST = "127.0.0.1";
+export const OAUTH_REDIRECT_URI = "https://sschaller.github.io/redirect.html";
 
 export interface TokenResponse {
   access_token: string;
@@ -46,80 +45,74 @@ export function generateState(): string {
     .join("");
 }
 
-/**
- * Starts a temporary local HTTP server to receive the OAuth callback,
- * then opens the browser to the Google auth URL.
- * @returns promise that resolves with the authorization code.
- */
-export function startLoopbackServer(expectedState: string): Promise<{
-  port: number;
+let pendingOAuthResolve: ((code: string) => void) | null = null;
+let pendingOAuthReject: ((err: Error) => void) | null = null;
+let pendingOAuthState: string | null = null;
+
+export function waitForOAuthCode(expectedState: string): {
   codePromise: Promise<string>;
-  server: http.Server;
-}> {
-  return new Promise((resolveSetup) => {
-    const server = http.createServer();
+  cancel: () => void;
+} {
+  // Cancel any previous pending flow
+  if (pendingOAuthReject) {
+    pendingOAuthReject(new Error("OAuth flow superseded"));
+  }
 
-    const codePromise = new Promise<string>((resolveCode, rejectCode) => {
-      const timeout = setTimeout(() => {
-        server.close();
-        rejectCode(new Error("OAuth timed out after 5 minutes"));
-      }, 5 * 60 * 1000);
+  let timeoutId: ReturnType<typeof setTimeout>;
 
-      server.on("request", (req, res) => {
-        const url = new URL(req.url || "/", `http://${LOOPBACK_HOST}`);
-        const code = url.searchParams.get("code");
-        const error = url.searchParams.get("error");
-        const state = url.searchParams.get("state");
+  const codePromise = new Promise<string>((resolve, reject) => {
+    pendingOAuthResolve = resolve;
+    pendingOAuthReject = reject;
+    pendingOAuthState = expectedState;
 
-        res.setHeader("Content-Type", "text/html");
-
-        if (error) {
-          res.writeHead(400);
-          res.end(
-            "<html><body><h2>Authorization failed</h2><p>You can close this tab.</p></body></html>",
-          );
-          clearTimeout(timeout);
-          server.close();
-          rejectCode(new Error(`OAuth error: ${error}`));
-          return;
-        }
-
-        if (code) {
-          if (state !== expectedState) {
-            res.writeHead(400);
-            res.end(
-              "<html><body><h2>Authorization failed</h2><p>State mismatch. You can close this tab.</p></body></html>",
-            );
-            clearTimeout(timeout);
-            server.close();
-            rejectCode(new Error("OAuth state mismatch"));
-            return;
-          }
-          res.writeHead(200);
-          res.end(
-            "<html><body><h2>Authorization successful</h2><p>You can close this tab and return to Obsidian.</p></body></html>",
-          );
-          clearTimeout(timeout);
-          server.close();
-          resolveCode(code);
-          return;
-        }
-
-        res.writeHead(400);
-        res.end(
-          "<html><body><h2>Missing authorization code</h2></body></html>",
-        );
-      });
-    });
-
-    // Use a fixed port so the redirect URI can be registered in Google Console
-    server.listen(42813, LOOPBACK_HOST, () => {
-      const addr = server.address();
-      const port =
-        typeof addr === "object" && addr !== null ? addr.port : 0;
-      resolveSetup({ port, codePromise, server });
-    });
+    timeoutId = setTimeout(() => {
+      pendingOAuthResolve = null;
+      pendingOAuthReject = null;
+      pendingOAuthState = null;
+      reject(new Error("OAuth timed out after 5 minutes"));
+    }, 5 * 60 * 1000);
   });
+
+  const cancel = () => {
+    clearTimeout(timeoutId);
+    pendingOAuthResolve = null;
+    pendingOAuthReject = null;
+    pendingOAuthState = null;
+  };
+
+  return { codePromise, cancel };
+}
+
+export function handleOAuthCallback(params: Record<string, string>): void {
+  if (!pendingOAuthResolve || !pendingOAuthReject) {
+    return;
+  }
+
+  if (params.error) {
+    const reject = pendingOAuthReject;
+    pendingOAuthResolve = null;
+    pendingOAuthReject = null;
+    pendingOAuthState = null;
+    reject(new Error(`OAuth error: ${params.error}`));
+    return;
+  }
+
+  if (params.state !== pendingOAuthState) {
+    const reject = pendingOAuthReject;
+    pendingOAuthResolve = null;
+    pendingOAuthReject = null;
+    pendingOAuthState = null;
+    reject(new Error("OAuth state mismatch"));
+    return;
+  }
+
+  if (params.code) {
+    const resolve = pendingOAuthResolve;
+    pendingOAuthResolve = null;
+    pendingOAuthReject = null;
+    pendingOAuthState = null;
+    resolve(params.code);
+  }
 }
 
 export function buildAuthUrl(
@@ -136,6 +129,8 @@ export function buildAuthUrl(
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
     state: state,
+    access_type: "offline",
+    prompt: "consent",
   });
   return `${AUTH_URL}?${params.toString()}`;
 }

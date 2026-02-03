@@ -8,7 +8,6 @@ export interface SyncProfile {
   driveFolderId: string;
   driveFolderName: string;
   localFolder: string;
-  firstSync: boolean;
 }
 
 export interface GDriveSyncSettings {
@@ -38,7 +37,6 @@ export function createDefaultProfile(): SyncProfile {
     driveFolderId: "",
     driveFolderName: "ObsidianSync",
     localFolder: "",
-    firstSync: true,
   };
 }
 

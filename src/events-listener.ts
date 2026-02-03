@@ -45,8 +45,9 @@ export default class EventsListener {
   }
 
   private isInProfileScope(filePath: string, profile: SyncProfile): boolean {
-    if (!profile.localFolder) return true;
-    return filePath.startsWith(profile.localFolder + "/") || filePath === profile.localFolder;
+    const folder = profile.localFolder.replace(/\/+$/, "");
+    if (!folder) return true;
+    return filePath.startsWith(folder + "/") || filePath === folder;
   }
 
   private async onCreate(file: TAbstractFile) {
@@ -81,7 +82,6 @@ export default class EventsListener {
         justDownloaded: false,
         lastModified: Date.now(),
         driveFileId: null,
-        obfuscatedName: null,
       };
       await entry.metadataStore.save();
       await this.logger.info("Updated created file", file.path);
@@ -167,9 +167,10 @@ export default class EventsListener {
   }
 
   private toMetaPath(filePath: string, profile: SyncProfile): string {
-    if (!profile.localFolder) return filePath;
-    if (filePath.startsWith(profile.localFolder + "/")) {
-      return filePath.slice(profile.localFolder.length + 1);
+    const folder = profile.localFolder.replace(/\/+$/, "");
+    if (!folder) return filePath;
+    if (filePath.startsWith(folder + "/")) {
+      return filePath.slice(folder.length + 1);
     }
     return filePath;
   }

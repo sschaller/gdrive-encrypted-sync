@@ -1,5 +1,5 @@
 import { Vault, Notice, normalizePath } from "obsidian";
-import GDriveClient, { DriveFileInfo } from "./gdrive/client";
+import GDriveClient from "./gdrive/client";
 import MetadataStore, {
   FileMetadata,
   Metadata,
@@ -14,7 +14,6 @@ import {
   encryptContent,
   decryptContent,
   encryptFilename,
-  decryptFilename,
   computeContentHash,
   generateSalt,
   deriveKey,
@@ -66,25 +65,33 @@ export default class SyncManager {
     this.client = new GDriveClient(this.settings, this.profile, this.logger);
   }
 
+  /** Get localFolder with trailing slashes removed */
+  private get normalizedLocalFolder(): string {
+    return this.profile.localFolder.replace(/\/+$/, "");
+  }
+
   /** Convert a metadata-relative path to a vault-absolute path */
   private toVaultPath(metaPath: string): string {
-    if (!this.profile.localFolder) return metaPath;
-    return `${this.profile.localFolder}/${metaPath}`;
+    const folder = this.normalizedLocalFolder;
+    if (!folder) return metaPath;
+    return `${folder}/${metaPath}`;
   }
 
   /** Convert a vault-absolute path to a metadata-relative path */
   private toMetaPath(vaultPath: string): string {
-    if (!this.profile.localFolder) return vaultPath;
-    if (vaultPath.startsWith(this.profile.localFolder + "/")) {
-      return vaultPath.slice(this.profile.localFolder.length + 1);
+    const folder = this.normalizedLocalFolder;
+    if (!folder) return vaultPath;
+    if (vaultPath.startsWith(folder + "/")) {
+      return vaultPath.slice(folder.length + 1);
     }
     return vaultPath;
   }
 
   /** Check if a vault path is within this profile's scope */
   private isInScope(vaultPath: string): boolean {
-    if (!this.profile.localFolder) return true;
-    return vaultPath.startsWith(this.profile.localFolder + "/") || vaultPath === this.profile.localFolder;
+    const folder = this.normalizedLocalFolder;
+    if (!folder) return true;
+    return vaultPath.startsWith(folder + "/") || vaultPath === folder;
   }
 
   async initCryptoKey(): Promise<void> {
@@ -110,164 +117,81 @@ export default class SyncManager {
   }
 
   /**
-   * Returns true if the local vault root is empty.
+   * Syncs local and remote folders. Handles both initial sync and subsequent syncs.
    */
-  private async vaultIsEmpty(): Promise<boolean> {
-    const rootPath = this.profile.localFolder || this.vault.getRoot().path;
-    if (this.profile.localFolder) {
-      if (!(await this.vault.adapter.exists(rootPath))) {
-        return true;
-      }
-    }
-    const { files, folders } = await this.vault.adapter.list(rootPath);
-    return (
-      files.length === 0 ||
-      // We filter out the config dir since is always present so it's fine if we find it.
-      folders.filter((f) => f !== this.vault.configDir).length === 0
-    );
-  }
-
-  /**
-   * Handles first sync with remote and local.
-   * This fails if neither remote nor local folders are empty.
-   */
-  async firstSync() {
+  async sync() {
     if (this.syncing) {
-      this.logger.info("First sync already in progress");
-      // We're already syncing, nothing to do
+      this.logger.info("Sync already in progress");
       return;
     }
 
     this.syncing = true;
     try {
-      await this.firstSyncImpl();
-    } catch (err) {
+      await this.syncImpl();
+    } finally {
       this.syncing = false;
-      throw err;
     }
-    this.syncing = false;
   }
 
-  private async firstSyncImpl() {
-    await this.logger.info("Starting first sync");
+  private async syncImpl() {
+    await this.logger.info("Starting sync");
 
     if (!this.cryptoKey) {
       throw new Error("Encryption key not initialized. Set a password first.");
     }
 
-    // Find or create sync folder
-    const folderId = await this.client.findOrCreateSyncFolder(
-      this.profile.driveFolderName,
-    );
-    this.profile.driveFolderId = folderId;
-    this.metadataStore.data.driveFolderId = folderId;
+    // Find or create the Drive folder
+    let folderId = this.metadataStore.data.driveFolderId;
+    if (!folderId) {
+      folderId = await this.client.findOrCreateSyncFolder(
+        this.profile.driveFolderName,
+      );
+      this.profile.driveFolderId = folderId;
+      this.metadataStore.data.driveFolderId = folderId;
+    }
 
     const driveFiles = await this.client.listFiles(folderId);
-    const driveIsEmpty =
-      driveFiles.length === 0 ||
-      (driveFiles.length === 1 &&
-        driveFiles[0].name === SYNC_MANIFEST_NAME);
-    const vaultIsEmpty = await this.vaultIsEmpty();
 
-    if (!driveIsEmpty && !vaultIsEmpty) {
-      // Both have files, we can't sync, show error
-      await this.logger.error("Both remote and local have files, can't sync");
-      throw new Error("Both remote and local have files, can't sync");
-    } else if (driveIsEmpty) {
-      // Remote has no files, let's just upload whatever we have locally.
-      // This is fine even if the vault is empty.
-      // The most important thing at this point is that the remote manifest is created.
-      await this.firstSyncFromLocal(folderId);
-    } else {
-      // Local has no files, let's download whatever we have in the remote folder.
-      // This is fine even if the remote folder is empty.
-      // In this case too the important step is that the remote manifest is created.
-      await this.firstSyncFromRemote(folderId, driveFiles);
-    }
-  }
-
-  /**
-   * Handles first sync when remote Drive folder is empty.
-   * Uploads all local files encrypted to Drive.
-   */
-  private async firstSyncFromLocal(folderId: string) {
-    await this.logger.info("Starting first sync from local files");
-
-    const filePaths = Object.keys(this.metadataStore.data.files).filter(
-      // We should not try to sync deleted files, this can happen when
-      // the user renames or deletes files after enabling the plugin but
-      // before syncing for the first time
-      (fp) => !this.metadataStore.data.files[fp].deleted,
-    );
-
-    for (let i = 0; i < filePaths.length; i++) {
-      const filePath = filePaths[i];
-      const metaFileName = this.metadataStore.fileName;
-      if (filePath === `${this.vault.configDir}/${metaFileName}`) {
-        continue;
-      }
-      const vaultPath = this.toVaultPath(filePath);
-      const normalizedPath = normalizePath(vaultPath);
-      if (!(await this.vault.adapter.exists(normalizedPath))) {
-        continue;
-      }
-      const content = await this.vault.adapter.readBinary(normalizedPath);
-      const contentHash = await computeContentHash(content);
-      const encrypted = await encryptContent(content, this.cryptoKey!);
-      const obfuscatedName = await encryptFilename(filePath, this.cryptoKey!);
-
-      const driveFile = await this.client.uploadFile(
-        folderId,
-        obfuscatedName,
-        encrypted,
-      );
-
-      this.metadataStore.data.files[filePath].contentHash = contentHash;
-      this.metadataStore.data.files[filePath].driveFileId = driveFile.id;
-      this.metadataStore.data.files[filePath].obfuscatedName = obfuscatedName;
-      this.metadataStore.data.files[filePath].dirty = false;
-      this.onProgress?.(i + 1, filePaths.length);
-    }
-
-    await this.finalizeSync(folderId, null);
-  }
-
-  /**
-   * Handles first sync when local vault is empty but remote has files.
-   * Downloads and decrypts all files from the remote Drive folder.
-   *
-   * @param folderId The Google Drive folder ID
-   * @param driveFiles All files in the remote Drive folder
-   */
-  private async firstSyncFromRemote(
-    folderId: string,
-    driveFiles: DriveFileInfo[],
-  ) {
-    await this.logger.info("Starting first sync from remote files");
-
-    // Download and decrypt manifest first
-    const manifestFile = driveFiles.find(
+    // Check for existing remote manifest
+    let manifestFile = driveFiles.find(
       (f) => f.name === SYNC_MANIFEST_NAME,
     );
-    if (!manifestFile) {
-      await this.logger.info("No remote manifest found, treating as empty");
-      await this.firstSyncFromLocal(folderId);
-      return;
+
+    // If remote manifest exists, adopt its salt and re-derive key
+    if (manifestFile) {
+      const manifestRaw = await this.client.downloadFile(manifestFile.id);
+      const manifestBytes = new Uint8Array(manifestRaw);
+      const remoteSalt = manifestBytes.slice(0, SALT_LENGTH);
+      const remoteSaltB64 = btoa(String.fromCharCode(...remoteSalt));
+
+      // If our salt differs from remote, adopt the remote salt
+      if (this.metadataStore.data.encryptionSalt !== remoteSaltB64) {
+        await this.logger.info("Adopting remote encryption salt");
+        this.metadataStore.data.encryptionSalt = remoteSaltB64;
+        this.cryptoKey = await deriveKey(
+          this.profile.encryptionPassword,
+          remoteSalt,
+        );
+        await this.metadataStore.save();
+      }
     }
 
+    // If no manifest exists yet, create an empty one to bootstrap
+    if (!manifestFile) {
+      await this.logger.info("No remote manifest found, creating initial manifest");
+      await this.finalizeSync(folderId, null);
+      // Re-fetch drive files to get the new manifest
+      const updatedDriveFiles = await this.client.listFiles(folderId);
+      manifestFile = updatedDriveFiles.find((f) => f.name === SYNC_MANIFEST_NAME);
+      if (!manifestFile) {
+        throw new Error("Failed to create remote manifest");
+      }
+    }
+
+    // Download and decrypt the remote manifest
     const manifestRaw = await this.client.downloadFile(manifestFile.id);
-    // The manifest has the 16-byte salt prepended (unencrypted),
-    // followed by the encrypted content
     const manifestBytes = new Uint8Array(manifestRaw);
-    const remoteSalt = manifestBytes.slice(0, SALT_LENGTH);
     const manifestEncrypted = manifestBytes.slice(SALT_LENGTH).buffer as ArrayBuffer;
-
-    // Re-derive key with the remote salt before decrypting
-    this.cryptoKey = await deriveKey(this.profile.encryptionPassword, remoteSalt);
-    this.metadataStore.data.encryptionSalt = btoa(
-      String.fromCharCode(...remoteSalt),
-    );
-
     let remoteMetadata: Metadata;
     try {
       const manifestDecrypted = await decryptContent(
@@ -281,133 +205,6 @@ export default class SyncManager {
       throw new Error(
         "Failed to decrypt remote manifest. Wrong encryption password?",
       );
-    }
-
-    // Build a map of drive files by name for quick lookup
-    const driveFilesByName: Record<string, DriveFileInfo> = {};
-    for (const df of driveFiles) {
-      driveFilesByName[df.name] = df;
-    }
-
-    // Download and decrypt each file
-    const metaFileName = this.metadataStore.fileName;
-    const remoteEntries = Object.entries(remoteMetadata.files);
-    for (let i = 0; i < remoteEntries.length; i++) {
-      const [filePath, fileMeta] = remoteEntries[i];
-      if (filePath === `${this.vault.configDir}/${metaFileName}`) {
-        continue;
-      }
-      if (fileMeta.deleted) {
-        continue;
-      }
-      if (!fileMeta.obfuscatedName || !fileMeta.driveFileId) {
-        continue;
-      }
-
-      const driveFile = driveFilesByName[fileMeta.obfuscatedName];
-      if (!driveFile) {
-        continue;
-      }
-
-      const encrypted = await this.client.downloadFile(driveFile.id);
-      const decrypted = await decryptContent(encrypted, this.cryptoKey!);
-
-      const vaultPath = this.toVaultPath(filePath);
-      const normalizedPath = normalizePath(vaultPath);
-      const fileFolder = normalizePath(
-        normalizedPath.split("/").slice(0, -1).join("/"),
-      );
-      if (fileFolder && !(await this.vault.adapter.exists(fileFolder))) {
-        await this.vault.adapter.mkdir(fileFolder);
-      }
-
-      await this.vault.adapter.writeBinary(normalizedPath, decrypted);
-
-      this.metadataStore.data.files[filePath] = {
-        path: filePath,
-        contentHash: fileMeta.contentHash,
-        dirty: false,
-        justDownloaded: true,
-        lastModified: fileMeta.lastModified,
-        driveFileId: driveFile.id,
-        obfuscatedName: fileMeta.obfuscatedName,
-      };
-      this.onProgress?.(i + 1, remoteEntries.length);
-    }
-
-    await this.finalizeSync(folderId, manifestFile.id);
-  }
-
-  /**
-   * Syncs local and remote folders.
-   * @returns
-   */
-  async sync() {
-    if (this.syncing) {
-      this.logger.info("Sync already in progress");
-      // We're already syncing, nothing to do
-      return;
-    }
-
-    const notice = new Notice("Syncing...");
-    this.syncing = true;
-    try {
-      await this.syncImpl();
-      // Shown only if sync doesn't fail
-      new Notice("Sync successful", 5000);
-    } catch (err) {
-      // Show the error to the user, it's not automatically dismissed to make sure
-      // the user sees it.
-      new Notice(`Error syncing. ${err}`);
-    }
-    this.syncing = false;
-    notice.hide();
-  }
-
-  private async syncImpl() {
-    await this.logger.info("Starting sync");
-
-    if (!this.cryptoKey) {
-      throw new Error("Encryption key not initialized. Set a password first.");
-    }
-
-    const folderId = this.metadataStore.data.driveFolderId;
-    if (!folderId) {
-      throw new Error("No Drive folder configured. Run first sync.");
-    }
-
-    const driveFiles = await this.client.listFiles(folderId);
-
-    // Find and decrypt remote manifest
-    const manifestFile = driveFiles.find(
-      (f) => f.name === SYNC_MANIFEST_NAME,
-    );
-    if (!manifestFile) {
-      throw new Error("Remote manifest is missing");
-    }
-
-    const manifestRaw = await this.client.downloadFile(manifestFile.id);
-    const manifestBytes = new Uint8Array(manifestRaw);
-    const manifestEncrypted = manifestBytes.slice(SALT_LENGTH).buffer as ArrayBuffer;
-    let remoteMetadata: Metadata;
-    try {
-      const manifestDecrypted = await decryptContent(
-        manifestEncrypted,
-        this.cryptoKey,
-      );
-      remoteMetadata = JSON.parse(
-        new TextDecoder().decode(manifestDecrypted),
-      );
-    } catch {
-      throw new Error(
-        "Failed to decrypt remote manifest. Wrong encryption password?",
-      );
-    }
-
-    // Build drive file lookup by name
-    const driveFilesByName: Record<string, DriveFileInfo> = {};
-    for (const df of driveFiles) {
-      driveFilesByName[df.name] = df;
     }
 
     const conflicts = await this.findConflicts(remoteMetadata.files);
@@ -457,6 +254,17 @@ export default class SyncManager {
       }
     }
 
+    await this.logger.info("Filename of metadata manifest", this.metadataStore.fileName);
+
+    await this.logger.info(
+      "Local files in metadata",
+      Object.keys(this.metadataStore.data.files),
+    );
+    await this.logger.info(
+      "Remote files in manifest",
+      Object.keys(remoteMetadata.files),
+    );
+
     const actions: SyncAction[] = [
       ...(await this.determineSyncActions(
         remoteMetadata.files,
@@ -503,16 +311,14 @@ export default class SyncManager {
           const existingMeta =
             this.metadataStore.data.files[action.filePath];
           let driveFileId: string;
-          let obfuscatedName: string;
 
           if (existingMeta?.driveFileId) {
             // Update existing file
             await this.client.updateFile(existingMeta.driveFileId, encrypted);
             driveFileId = existingMeta.driveFileId;
-            obfuscatedName = existingMeta.obfuscatedName!;
           } else {
             // Upload new file
-            obfuscatedName = await encryptFilename(
+            const obfuscatedName = await encryptFilename(
               action.filePath,
               this.cryptoKey!,
             );
@@ -531,7 +337,6 @@ export default class SyncManager {
             justDownloaded: false,
             lastModified: Date.now(),
             driveFileId,
-            obfuscatedName,
           };
           break;
         }
@@ -540,12 +345,8 @@ export default class SyncManager {
           if (!remoteMeta?.driveFileId) {
             continue;
           }
-          const driveFile = driveFilesByName[remoteMeta.obfuscatedName!];
-          if (!driveFile) {
-            continue;
-          }
 
-          const encrypted = await this.client.downloadFile(driveFile.id);
+          const encrypted = await this.client.downloadFile(remoteMeta.driveFileId);
           const decrypted = await decryptContent(encrypted, this.cryptoKey!);
 
           const vaultPath = this.toVaultPath(action.filePath);
@@ -568,8 +369,7 @@ export default class SyncManager {
             dirty: false,
             justDownloaded: true,
             lastModified: remoteMeta.lastModified,
-            driveFileId: driveFile.id,
-            obfuscatedName: remoteMeta.obfuscatedName,
+            driveFileId: remoteMeta.driveFileId,
           };
           break;
         }
@@ -664,7 +464,7 @@ export default class SyncManager {
         const remoteMeta = filesMetadata[filePath];
         let remoteContent = "";
 
-        if (remoteMeta.driveFileId && remoteMeta.obfuscatedName) {
+        if (remoteMeta.driveFileId) {
           const encrypted = await this.client.downloadFile(
             remoteMeta.driveFileId,
           );
@@ -921,24 +721,9 @@ export default class SyncManager {
           justDownloaded: false,
           lastModified: Date.now(),
           driveFileId: null,
-          obfuscatedName: null,
         };
       });
 
-      // Must be the first time we run, initialize the metadata store
-      // with itself and all files in the vault.
-      const metaFileName = this.metadataStore.fileName;
-      this.metadataStore.data.files[
-        `${this.vault.configDir}/${metaFileName}`
-      ] = {
-        path: `${this.vault.configDir}/${metaFileName}`,
-        contentHash: null,
-        dirty: false,
-        justDownloaded: false,
-        lastModified: Date.now(),
-        driveFileId: null,
-        obfuscatedName: null,
-      };
       this.metadataStore.save();
     }
     await this.logger.info("Loaded metadata");
@@ -973,7 +758,6 @@ export default class SyncManager {
         justDownloaded: false,
         lastModified: Date.now(),
         driveFileId: null,
-        obfuscatedName: null,
       };
     });
     this.metadataStore.save();
