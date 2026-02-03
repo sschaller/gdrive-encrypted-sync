@@ -20,9 +20,8 @@ jobs:
 
       - name: Build plugin
         run: |
-          npm install -g pnpm@latest-10
-          pnpm install
-          pnpm build
+          npm ci
+          npm run build
 
       - name: Create release
         env:
