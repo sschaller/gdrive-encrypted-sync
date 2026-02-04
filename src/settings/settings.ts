@@ -5,7 +5,6 @@ export interface SyncProfile {
   googleAccessToken: string;
   googleTokenExpiry: number;
   encryptionPassword: string;
-  driveFolderId: string;
   driveFolderName: string;
   localFolder: string;
 }
@@ -34,7 +33,6 @@ export function createDefaultProfile(): SyncProfile {
     googleAccessToken: "",
     googleTokenExpiry: 0,
     encryptionPassword: "",
-    driveFolderId: "",
     driveFolderName: "ObsidianSync",
     localFolder: "",
   };

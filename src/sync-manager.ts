@@ -141,15 +141,7 @@ export default class SyncManager {
     }
 
     // Find or create the Drive folder
-    let folderId = this.metadataStore.data.driveFolderId;
-    if (!folderId) {
-      folderId = await this.client.findOrCreateSyncFolder(
-        this.profile.driveFolderName,
-      );
-      this.profile.driveFolderId = folderId;
-      this.metadataStore.data.driveFolderId = folderId;
-    }
-
+    const folderId = await this.client.findOrCreateSyncFolder(this.profile.driveFolderName);
     const driveFiles = await this.client.listFiles(folderId);
 
     // Check for existing remote manifest
@@ -640,7 +632,6 @@ export default class SyncManager {
   ) {
     const syncTime = Date.now();
     this.metadataStore.data.lastSync = syncTime;
-    this.metadataStore.data.driveFolderId = folderId;
     await this.metadataStore.save();
 
     // Encrypt and upload manifest with salt prepended (unencrypted)

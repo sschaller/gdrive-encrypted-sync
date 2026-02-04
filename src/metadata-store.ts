@@ -37,7 +37,6 @@ export interface Metadata {
   lastSync: number;
   files: Record<string, FileMetadata>;
   encryptionSalt: string;
-  driveFolderId: string;
 }
 
 /**
@@ -75,7 +74,6 @@ export default class MetadataStore {
         lastSync: 0,
         files: {},
         encryptionSalt: "",
-        driveFolderId: "",
       };
     }
   }
@@ -98,7 +96,6 @@ export default class MetadataStore {
       lastSync: 0,
       files: {},
       encryptionSalt: "",
-      driveFolderId: "",
     };
   }
 }
