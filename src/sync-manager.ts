@@ -3,7 +3,6 @@ import GDriveClient from "./gdrive/client";
 import MetadataStore, {
   FileMetadata,
   Metadata,
-  MANIFEST_FILE_NAME,
 } from "./metadata-store";
 import EventsListener from "./events-listener";
 import { GDriveSyncSettings, SyncProfile } from "./settings/settings";
@@ -149,6 +148,8 @@ export default class SyncManager {
       (f) => f.name === SYNC_MANIFEST_NAME,
     );
 
+    await this.logger.info("Test", manifestFile?.id);
+
     // If remote manifest exists, adopt its salt and re-derive key
     if (manifestFile) {
       const manifestRaw = await this.client.downloadFile(manifestFile.id);
@@ -246,7 +247,7 @@ export default class SyncManager {
       }
     }
 
-    await this.logger.info("Filename of metadata manifest", this.metadataStore.fileName);
+    await this.logger.info("Filename of metadata manifest", this.metadataStore.filePath);
 
     await this.logger.info(
       "Local files in metadata",
@@ -416,10 +417,10 @@ export default class SyncManager {
       return [];
     }
 
-    const metaFileName = this.metadataStore.fileName;
+    const metaFilePath = this.metadataStore.filePath;
     const conflicts = await Promise.all(
       commonFiles.map(async (filePath: string) => {
-        if (filePath === `${this.vault.configDir}/${metaFileName}`) {
+        if (filePath === metaFilePath) {
           // The manifest file is only internal, the user must not
           // handle conflicts for this
           return null;
@@ -489,7 +490,7 @@ export default class SyncManager {
   ) {
     let actions: SyncAction[] = [];
 
-    const metaFileName = this.metadataStore.fileName;
+    const metaFilePath = this.metadataStore.filePath;
     const commonFiles = Object.keys(remoteFiles)
       .filter((filePath) => filePath in localFiles)
       // Remove conflicting files, we determine their actions in a different way
@@ -498,7 +499,7 @@ export default class SyncManager {
     // Get diff for common files
     await Promise.all(
       commonFiles.map(async (filePath: string) => {
-        if (filePath === `${this.vault.configDir}/${metaFileName}`) {
+        if (filePath === metaFilePath) {
           // The manifest file must never trigger any action
           return;
         }
@@ -590,13 +591,13 @@ export default class SyncManager {
       }
     });
 
-    if (!this.settings.syncConfigDir) {
+    if (!this.profile.syncConfigDir) {
       // Remove all actions that involve the config directory if the user doesn't want to sync it.
       // The manifest file is always synced.
       return actions.filter((action: SyncAction) => {
         return (
           !action.filePath.startsWith(this.vault.configDir) ||
-          action.filePath === `${this.vault.configDir}/${metaFileName}`
+          action.filePath === metaFilePath
         );
       });
     }
@@ -685,7 +686,7 @@ export default class SyncManager {
       while (folders.length > 0) {
         const folder = folders.pop();
         if (folder === undefined) continue;
-        if (!this.settings.syncConfigDir && folder === this.vault.configDir) {
+        if (!this.profile.syncConfigDir && folder === this.vault.configDir) {
           await this.logger.info("Skipping config dir");
           // Skip the config dir if the user doesn't want to sync it
           continue;
@@ -777,9 +778,9 @@ export default class SyncManager {
     }
 
     // Remove all them from the metadata store
-    const metaFileName = this.metadataStore.fileName;
+    const metaFilePath = this.metadataStore.filePath;
     files.forEach((filePath: string) => {
-      if (filePath === `${this.vault.configDir}/${metaFileName}`) {
+      if (filePath === metaFilePath) {
         // We don't want to remove the metadata file even if it's in the config dir
         return;
       }

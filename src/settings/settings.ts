@@ -7,6 +7,7 @@ export interface SyncProfile {
   encryptionPassword: string;
   driveFolderName: string;
   localFolder: string;
+  syncConfigDir: boolean;
 }
 
 export interface GDriveSyncSettings {
@@ -16,7 +17,6 @@ export interface GDriveSyncSettings {
   syncStrategy: "manual" | "interval";
   syncInterval: number;
   syncOnStartup: boolean;
-  syncConfigDir: boolean;
   conflictHandling: "overwriteLocal" | "ask" | "overwriteRemote";
   conflictViewMode: "default" | "unified" | "split";
   showStatusBarItem: boolean;
@@ -35,6 +35,7 @@ export function createDefaultProfile(): SyncProfile {
     encryptionPassword: "",
     driveFolderName: "ObsidianSync",
     localFolder: "",
+    syncConfigDir: false,
   };
 }
 
@@ -45,7 +46,6 @@ export const DEFAULT_SETTINGS: GDriveSyncSettings = {
   syncStrategy: "manual",
   syncInterval: 1,
   syncOnStartup: false,
-  syncConfigDir: false,
   conflictHandling: "ask",
   conflictViewMode: "default",
   showStatusBarItem: true,

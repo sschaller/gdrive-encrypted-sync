@@ -151,27 +151,6 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
           });
       });
 
-    new Setting(containerEl)
-      .setName("Sync configs")
-      .setDesc("Sync Vault config folder with Google Drive")
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.syncConfigDir)
-          .onChange(async (value) => {
-            this.plugin.settings.syncConfigDir = value;
-            if (value) {
-              for (const manager of this.plugin.syncManagers.values()) {
-                await manager.addConfigDirToMetadata();
-              }
-            } else {
-              for (const manager of this.plugin.syncManagers.values()) {
-                await manager.removeConfigDirFromMetadata();
-              }
-            }
-            await this.plugin.saveSettings();
-          });
-      });
-
     const conflictHandlingOptions = {
       overwriteLocal: "Overwrite local file",
       ask: "Ask",
@@ -383,7 +362,16 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
     });
     folderInput.addEventListener("input", async () => {
       profile.localFolder = folderInput.value;
+      // Disable syncConfigDir if localFolder becomes non-empty
+      if (folderInput.value.trim() !== "" && profile.syncConfigDir) {
+        profile.syncConfigDir = false;
+        const manager = this.plugin.getSyncManager(profile.id);
+        if (manager) {
+          await manager.removeConfigDirFromMetadata();
+        }
+      }
       await this.plugin.saveSettings();
+      this.display();
     });
 
     // Connection
@@ -452,6 +440,35 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
           await manager.initCryptoKey();
         }
       }
+    });
+
+    // Sync config directory toggle (only enabled when syncing whole vault)
+    const syncConfigRow = ctrl.createDiv({ cls: "gdrive-sync-profile-row" });
+    syncConfigRow.createEl("label", { text: "Sync config folder" });
+    const syncConfigContainer = syncConfigRow.createDiv();
+    const syncConfigToggle = syncConfigContainer.createEl("input", {
+      type: "checkbox",
+    });
+    syncConfigToggle.checked = profile.syncConfigDir ?? false;
+    const isWholeVault = !profile.localFolder || profile.localFolder.trim() === "";
+    syncConfigToggle.disabled = !isWholeVault;
+    if (!isWholeVault) {
+      syncConfigContainer.createEl("span", {
+        text: " (only for whole vault sync)",
+        cls: "setting-item-description",
+      });
+    }
+    syncConfigToggle.addEventListener("change", async () => {
+      profile.syncConfigDir = syncConfigToggle.checked;
+      const manager = this.plugin.getSyncManager(profile.id);
+      if (manager) {
+        if (syncConfigToggle.checked) {
+          await manager.addConfigDirToMetadata();
+        } else {
+          await manager.removeConfigDirFromMetadata();
+        }
+      }
+      await this.plugin.saveSettings();
     });
 
     // Reorder + Delete buttons

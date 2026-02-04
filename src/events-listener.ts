@@ -1,5 +1,5 @@
 import { Vault, TAbstractFile, TFolder } from "obsidian";
-import MetadataStore, { MANIFEST_FILE_NAME } from "./metadata-store";
+import MetadataStore from "./metadata-store";
 import { GDriveSyncSettings, SyncProfile } from "./settings/settings";
 import Logger, { LOG_FILE_NAME } from "./logger";
 import GDriveSyncPlugin from "./main";
@@ -38,53 +38,17 @@ export default class EventsListener {
     plugin.registerEvent(this.vault.on("rename", this.onRename.bind(this)));
   }
 
-  private matchingEntries(filePath: string): ProfileEntry[] {
-    return this.entries.filter((entry) =>
-      this.isInProfileScope(filePath, entry.profile),
-    );
-  }
-
-  private isInProfileScope(filePath: string, profile: SyncProfile): boolean {
-    const folder = profile.localFolder.replace(/\/+$/, "");
-    if (!folder) return true;
-    return filePath.startsWith(folder + "/") || filePath === folder;
-  }
-
   private async onCreate(file: TAbstractFile) {
     await this.logger.info("Received create event", file.path);
     if (file instanceof TFolder) {
-      // Skip folders
       return;
     }
 
-    for (const entry of this.matchingEntries(file.path)) {
-      const metaPath = this.toMetaPath(file.path, entry.profile);
-      if (!this.isSyncable(file.path)) {
-        // The file has not been created in directory that we're syncing
+    for (const entry of this.entries) {
+      if (!this.isSyncable(file.path, entry.profile)) {
         continue;
       }
-
-      const data = entry.metadataStore.data.files[metaPath];
-      if (data && data.justDownloaded) {
-        // This file was just downloaded and not created by the user.
-        // It's enough to mark it as non just downloaded.
-        entry.metadataStore.data.files[metaPath].justDownloaded = false;
-        await entry.metadataStore.save();
-        await this.logger.info("Updated just downloaded created file", file.path);
-        continue;
-      }
-
-      entry.metadataStore.data.files[metaPath] = {
-        path: metaPath,
-        contentHash: null,
-        dirty: true,
-        // This file has been created by the user
-        justDownloaded: false,
-        lastModified: Date.now(),
-        driveFileId: null,
-      };
-      await entry.metadataStore.save();
-      await this.logger.info("Updated created file", file.path);
+      await this.onCreateForProfile(file, entry);
     }
   }
 
@@ -92,78 +56,104 @@ export default class EventsListener {
     const filePath = file instanceof TAbstractFile ? file.path : file;
     await this.logger.info("Received delete event", filePath);
     if (file instanceof TFolder) {
-      // Skip folders
       return;
     }
 
-    for (const entry of this.matchingEntries(filePath)) {
-      const metaPath = this.toMetaPath(filePath, entry.profile);
-      if (!this.isSyncable(filePath)) {
-        // The file was not in directory that we're syncing
+    for (const entry of this.entries) {
+      if (!this.isSyncable(filePath, entry.profile)) {
         continue;
       }
-      if (!entry.metadataStore.data.files[metaPath]) continue;
-
-      entry.metadataStore.data.files[metaPath].deleted = true;
-      entry.metadataStore.data.files[metaPath].deletedAt = Date.now();
-      await entry.metadataStore.save();
-      await this.logger.info("Updated deleted file", filePath);
+      await this.onDeleteForProfile(filePath, entry);
     }
   }
 
   private async onModify(file: TAbstractFile) {
     await this.logger.info("Received modify event", file.path);
     if (file instanceof TFolder) {
-      // Skip folders
       return;
     }
 
-    for (const entry of this.matchingEntries(file.path)) {
-      const metaPath = this.toMetaPath(file.path, entry.profile);
-      if (!this.isSyncable(file.path))
-      {
-        // The file has not been create in directory that we're syncing
+    for (const entry of this.entries) {
+      if (!this.isSyncable(file.path, entry.profile)) {
         continue;
       }
-
-      const data = entry.metadataStore.data.files[metaPath];
-      if (data && data.justDownloaded) {
-        // This file was just downloaded and not modified by the user.
-        // It's enough to makr it as non just downloaded.
-        entry.metadataStore.data.files[metaPath].justDownloaded = false;
-        await entry.metadataStore.save();
-        await this.logger.info("Updated just downloaded modified file", file.path);
-        continue;
-      }
-      entry.metadataStore.data.files[metaPath].lastModified = Date.now();
-      entry.metadataStore.data.files[metaPath].dirty = true;
-      await entry.metadataStore.save();
-      await this.logger.info("Updated modified file", file.path);
+      await this.onModifyForProfile(file, entry);
     }
   }
 
   private async onRename(file: TAbstractFile, oldPath: string) {
     await this.logger.info("Received rename event", file.path);
     if (file instanceof TFolder) {
-      // Skip folders
       return;
     }
 
-    if (this.isSyncable(file.path) || this.isSyncable(oldPath)) {
-      if (this.isSyncable(file.path) && this.isSyncable(oldPath)) {
-        // Both files are in the synced directory
-        // First create the new one
-        await this.onCreate(file);
-        // Then delete the old one
-        await this.onDelete(oldPath);
-      } else if (this.isSyncable(file.path)) {
-        // Only the new file is in the local directory
-        await this.onCreate(file);
-      } else if (this.isSyncable(oldPath)) {
-        // Only the old file was in the local directory
-        await this.onDelete(oldPath);
+    for (const entry of this.entries) {
+      const newSyncable = this.isSyncable(file.path, entry.profile);
+      const oldSyncable = this.isSyncable(oldPath, entry.profile);
+
+      if (newSyncable && oldSyncable) {
+        await this.onCreateForProfile(file, entry);
+        await this.onDeleteForProfile(oldPath, entry);
+      } else if (newSyncable) {
+        await this.onCreateForProfile(file, entry);
+      } else if (oldSyncable) {
+        await this.onDeleteForProfile(oldPath, entry);
       }
     }
+  }
+
+  private async onCreateForProfile(file: TAbstractFile, entry: ProfileEntry) {
+    const metaPath = this.toMetaPath(file.path, entry.profile);
+    const data = entry.metadataStore.data.files[metaPath];
+    if (data && data.justDownloaded) {
+      // This file was just downloaded and not created by the user.
+      // It's enough to mark it as non just downloaded.
+      entry.metadataStore.data.files[metaPath].justDownloaded = false;
+      await entry.metadataStore.save();
+      await this.logger.info("Updated just downloaded created file", file.path);
+      return;
+    }
+
+    entry.metadataStore.data.files[metaPath] = {
+      path: metaPath,
+      contentHash: null,
+      dirty: true,
+      // This file has been created by the user
+      justDownloaded: false,
+      lastModified: Date.now(),
+      driveFileId: null,
+    };
+    await entry.metadataStore.save();
+    await this.logger.info("Updated created file", file.path);
+  }
+
+  private async onDeleteForProfile(filePath: string, entry: ProfileEntry) {
+    const metaPath = this.toMetaPath(filePath, entry.profile);
+    if (!entry.metadataStore.data.files[metaPath]) return;
+
+    entry.metadataStore.data.files[metaPath].deleted = true;
+    entry.metadataStore.data.files[metaPath].deletedAt = Date.now();
+    await entry.metadataStore.save();
+    await this.logger.info("Updated deleted file", filePath);
+  }
+
+  private async onModifyForProfile(file: TAbstractFile, entry: ProfileEntry) {
+    const metaPath = this.toMetaPath(file.path, entry.profile);
+    const data = entry.metadataStore.data.files[metaPath];
+    if (data && data.justDownloaded) {
+      // This file was just downloaded and not modified by the user.
+      // It's enough to mark it as non just downloaded.
+      entry.metadataStore.data.files[metaPath].justDownloaded = false;
+      await entry.metadataStore.save();
+      await this.logger.info("Updated just downloaded modified file", file.path);
+      return;
+    }
+    if (!entry.metadataStore.data.files[metaPath]) return;
+
+    entry.metadataStore.data.files[metaPath].lastModified = Date.now();
+    entry.metadataStore.data.files[metaPath].dirty = true;
+    await entry.metadataStore.save();
+    await this.logger.info("Updated modified file", file.path);
   }
 
   private toMetaPath(filePath: string, profile: SyncProfile): string {
@@ -175,11 +165,8 @@ export default class EventsListener {
     return filePath;
   }
 
-  private isSyncable(filePath: string) {
-    if (filePath === `${this.vault.configDir}/${MANIFEST_FILE_NAME}`) {
-      // Manifest file must always be synced
-      return true;
-    } else if (
+  private isSyncable(filePath: string, profile: SyncProfile) {
+    if (
       filePath === `${this.vault.configDir}/workspace.json` ||
       filePath === `${this.vault.configDir}/workspace-mobile.json`
     ) {
@@ -188,15 +175,14 @@ export default class EventsListener {
     } else if (filePath === `${this.vault.configDir}/${LOG_FILE_NAME}`) {
       // Don't sync the log file, doesn't make sense
       return false;
-    } else if (
-      this.settings.syncConfigDir &&
-      filePath.startsWith(this.vault.configDir)
-    ) {
-      // Sync configs only if the user explicitly wants to
-      return true;
-    } else {
-      // All other files can be synced
-      return true;
+    } else if (filePath.startsWith(this.vault.configDir)) {
+      // Config files: sync only if profile has syncConfigDir enabled
+      return profile.syncConfigDir ?? false;
     }
+
+    // Check folder scope
+    const folder = profile.localFolder.replace(/\/+$/, "");
+    if (!folder) return true;
+    return filePath.startsWith(folder + "/") || filePath === folder;
   }
 }
