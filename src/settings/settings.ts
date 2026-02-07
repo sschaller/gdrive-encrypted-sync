@@ -13,6 +13,7 @@ export interface SyncProfile {
 export interface GDriveSyncSettings {
   googleClientId: string;
   googleClientSecret: string;
+  oauthRedirectUri: string;
   profiles: SyncProfile[];
   syncStrategy: "manual" | "interval";
   syncInterval: number;
@@ -39,9 +40,13 @@ export function createDefaultProfile(): SyncProfile {
   };
 }
 
+export const DEFAULT_OAUTH_REDIRECT_URI =
+  "https://sschaller.github.io/oauth-redirect.html";
+
 export const DEFAULT_SETTINGS: GDriveSyncSettings = {
   googleClientId: "",
   googleClientSecret: "",
+  oauthRedirectUri: DEFAULT_OAUTH_REDIRECT_URI,
   profiles: [createDefaultProfile()],
   syncStrategy: "manual",
   syncInterval: 1,

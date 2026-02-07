@@ -54,8 +54,11 @@ Before syncing, you need to set up Google Cloud OAuth credentials and configure 
    - Copy the **Client ID** and **Client Secret**
 
 > [!NOTE]
-> The redirect URI must point to a hosted copy of `docs/oauth-redirect.html`. If you fork this repo and enable GitHub Pages, your redirect URI will be:
+> The redirect URI must point to a hosted copy of `docs/oauth-redirect.html`.
+> You can use the default redirect URI already configured in the plugin: `https://sschaller.github.io/oauth-redirect.html`.
+> If you prefer to host your own, fork this repo and enable GitHub Pages — your redirect URI will be:
 > `https://YOUR_USERNAME.github.io/YOUR_REPO_NAME/oauth-redirect.html`
+> Then update the **OAuth Redirect URI** in the plugin settings to match.
 
 #### Plugin configuration
 

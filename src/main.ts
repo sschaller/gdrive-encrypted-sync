@@ -21,7 +21,6 @@ import {
   exchangeCodeForTokens,
   waitForOAuthCode,
   handleOAuthCallback,
-  OAUTH_REDIRECT_URI,
 } from "./gdrive/oauth";
 import EventsListener from "./events-listener";
 
@@ -214,7 +213,7 @@ export default class GDriveSyncPlugin extends Plugin {
 
     const { codePromise, cancel } = waitForOAuthCode(state);
     this.cancelOAuth = cancel;
-    const url = buildAuthUrl(this.settings.googleClientId, challenge, OAUTH_REDIRECT_URI, state);
+    const url = buildAuthUrl(this.settings.googleClientId, challenge, this.settings.oauthRedirectUri, state);
     window.open(url);
 
     try {
@@ -224,7 +223,7 @@ export default class GDriveSyncPlugin extends Plugin {
         this.settings.googleClientSecret,
         code,
         codeVerifier,
-        OAUTH_REDIRECT_URI,
+        this.settings.oauthRedirectUri,
       );
       profile.googleAccessToken = tokens.access_token;
       profile.googleRefreshToken =

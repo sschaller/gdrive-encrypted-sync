@@ -9,7 +9,7 @@ import {
 } from "obsidian";
 import GDriveSyncPlugin from "src/main";
 import { copyToClipboard } from "src/utils";
-import { SyncProfile, createDefaultProfile } from "./settings";
+import { SyncProfile, createDefaultProfile, DEFAULT_OAUTH_REDIRECT_URI } from "./settings";
 
 export default class GDriveSyncSettingsTab extends PluginSettingTab {
   plugin: GDriveSyncPlugin;
@@ -67,6 +67,22 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
           }).inputEl.type = "password";
         secretInput = text;
       });
+
+    new Setting(containerEl)
+      .setName("OAuth Redirect URI")
+      .setDesc(
+        "Redirect URI for the OAuth flow. Must match the authorized redirect URI in Google Cloud Console.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_OAUTH_REDIRECT_URI)
+          .setValue(this.plugin.settings.oauthRedirectUri)
+          .onChange(async (value) => {
+            this.plugin.settings.oauthRedirectUri =
+              value || DEFAULT_OAUTH_REDIRECT_URI;
+            await this.plugin.saveSettings();
+          }),
+      );
 
     // ── Sync Profiles ──
     new Setting(containerEl).setName("Sync profiles").setHeading();

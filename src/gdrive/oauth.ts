@@ -3,7 +3,6 @@ import { requestUrl } from "obsidian";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SCOPE = "https://www.googleapis.com/auth/drive.file";
-export const OAUTH_REDIRECT_URI = "https://sschaller.github.io/redirect.html";
 
 export interface TokenResponse {
   access_token: string;
