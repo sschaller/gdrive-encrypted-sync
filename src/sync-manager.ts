@@ -169,35 +169,31 @@ export default class SyncManager {
       }
     }
 
-    // If no manifest exists yet, create an empty one to bootstrap
-    if (!manifestFile) {
-      await this.logger.info("No remote manifest found, creating initial manifest");
-      await this.finalizeSync(folderId, null);
-      // Re-fetch drive files to get the new manifest
-      const updatedDriveFiles = await this.client.listFiles(folderId);
-      manifestFile = updatedDriveFiles.find((f) => f.name === SYNC_MANIFEST_NAME);
-      if (!manifestFile) {
-        throw new Error("Failed to create remote manifest");
-      }
-    }
-
-    // Download and decrypt the remote manifest
-    const manifestRaw = await this.client.downloadFile(manifestFile.id);
-    const manifestBytes = new Uint8Array(manifestRaw);
-    const manifestEncrypted = manifestBytes.slice(SALT_LENGTH).buffer as ArrayBuffer;
+    // If no manifest exists, use empty remote metadata so that all local
+    // files are treated as new uploads. The manifest will be created at
+    // the end of sync with valid driveFileIds for every file.
     let remoteMetadata: Metadata;
-    try {
-      const manifestDecrypted = await decryptContent(
-        manifestEncrypted,
-        this.cryptoKey!,
-      );
-      remoteMetadata = JSON.parse(
-        new TextDecoder().decode(manifestDecrypted),
-      );
-    } catch {
-      throw new Error(
-        "Failed to decrypt remote manifest. Wrong encryption password?",
-      );
+    if (!manifestFile) {
+      await this.logger.info("No remote manifest found, will create after sync");
+      remoteMetadata = { lastSync: 0, files: {}, encryptionSalt: "" };
+    } else {
+      // Download and decrypt the remote manifest
+      const manifestRaw = await this.client.downloadFile(manifestFile.id);
+      const manifestBytes = new Uint8Array(manifestRaw);
+      const manifestEncrypted = manifestBytes.slice(SALT_LENGTH).buffer as ArrayBuffer;
+      try {
+        const manifestDecrypted = await decryptContent(
+          manifestEncrypted,
+          this.cryptoKey!,
+        );
+        remoteMetadata = JSON.parse(
+          new TextDecoder().decode(manifestDecrypted),
+        );
+      } catch {
+        throw new Error(
+          "Failed to decrypt remote manifest. Wrong encryption password?",
+        );
+      }
     }
 
     const conflicts = await this.findConflicts(remoteMetadata.files);
@@ -336,6 +332,10 @@ export default class SyncManager {
         case "download": {
           const remoteMeta = remoteMetadata.files[action.filePath];
           if (!remoteMeta?.driveFileId) {
+            await this.logger.warn(
+              "Skipping download, file has no driveFileId in remote manifest",
+              action.filePath,
+            );
             continue;
           }
 
@@ -399,7 +399,7 @@ export default class SyncManager {
         Date.now();
     }
 
-    await this.finalizeSync(folderId, manifestFile.id);
+    await this.finalizeSync(folderId, manifestFile?.id ?? null);
   }
 
   /**
