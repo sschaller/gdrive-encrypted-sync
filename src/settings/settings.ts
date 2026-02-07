@@ -15,7 +15,7 @@ export interface GDriveSyncSettings {
   googleClientSecret: string;
   oauthRedirectUri: string;
   profiles: SyncProfile[];
-  syncStrategy: "manual" | "interval";
+  syncStrategy: "manual" | "automatic";
   syncInterval: number;
   syncOnStartup: boolean;
   conflictHandling: "overwriteLocal" | "ask" | "overwriteRemote";
@@ -49,7 +49,7 @@ export const DEFAULT_SETTINGS: GDriveSyncSettings = {
   oauthRedirectUri: DEFAULT_OAUTH_REDIRECT_URI,
   profiles: [createDefaultProfile()],
   syncStrategy: "manual",
-  syncInterval: 1,
+  syncInterval: 10,
   syncOnStartup: false,
   conflictHandling: "ask",
   conflictViewMode: "default",

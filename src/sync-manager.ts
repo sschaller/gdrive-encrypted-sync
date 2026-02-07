@@ -44,8 +44,6 @@ type OnConflictsCallback = (
 export default class SyncManager {
   metadataStore: MetadataStore;
   private client: GDriveClient;
-  private syncIntervalId: number | null = null;
-
   // Use to track if syncing is in progress, this ideally
   // prevents multiple syncs at the same time and creation
   // of messy conflicts.
@@ -793,40 +791,6 @@ export default class SyncManager {
   getFileMetadata(filePath: string): FileMetadata {
     const metaPath = this.toMetaPath(filePath);
     return this.metadataStore.data.files[metaPath];
-  }
-
-  /**
-   * Starts a new sync interval.
-   * Raises an error if the interval is already running.
-   */
-  startSyncInterval(minutes: number): number {
-    if (this.syncIntervalId) {
-      throw new Error("Sync interval is already running");
-    }
-    this.syncIntervalId = window.setInterval(
-      async () => await this.sync(),
-      // Sync interval is set in minutes but setInterval expects milliseconds
-      minutes * 60 * 1000,
-    );
-    return this.syncIntervalId;
-  }
-
-  /**
-   * Stops the currently running sync interval
-   */
-  stopSyncInterval() {
-    if (this.syncIntervalId) {
-      window.clearInterval(this.syncIntervalId);
-      this.syncIntervalId = null;
-    }
-  }
-
-  /**
-   * Util function that stops and restart the sync interval
-   */
-  restartSyncInterval(minutes: number) {
-    this.stopSyncInterval();
-    return this.startSyncInterval(minutes);
   }
 
   async resetMetadata() {

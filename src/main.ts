@@ -51,6 +51,7 @@ export default class GDriveSyncPlugin extends Plugin {
   // By keeping them here we can recreate it easily.
   private conflicts: ConflictFile[] = [];
   private cancelOAuth: (() => void) | null = null;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Helper to get the first profile's sync manager (for backwards compat in settings UI) */
   getSyncManager(profileId: string): SyncManager | undefined {
@@ -111,16 +112,16 @@ export default class GDriveSyncPlugin extends Plugin {
 
     await this.initSyncManagers();
 
-    if (this.settings.syncStrategy == "interval") {
-      this.restartSyncInterval();
-    }
-
     this.app.workspace.onLayoutReady(async () => {
       // Create the events handling only after tha layout is ready to avoid
       // getting spammed with create events.
       // See the official Obsidian docs:
       // https://docs.obsidian.md/Reference/TypeScript+API/Vault/on('create')
       this.eventsListener.start(this);
+
+      if (this.settings.syncOnStartup) {
+        await this.sync();
+      }
 
       // Load the ribbons after layout is ready so they're shown after the core
       // buttons
@@ -185,6 +186,7 @@ export default class GDriveSyncPlugin extends Plugin {
         entries,
         this.settings,
         this.logger,
+        () => this.scheduleDebouncedSync(),
       );
     }
   }
@@ -274,7 +276,7 @@ export default class GDriveSyncPlugin extends Plugin {
   }
 
   async onunload() {
-    this.stopSyncInterval();
+    this.clearDebouncedSync();
     if (this.cancelOAuth) {
       this.cancelOAuth();
       this.cancelOAuth = null;
@@ -393,31 +395,19 @@ export default class GDriveSyncPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  // Proxy methods from sync manager to ease handling the interval
-  // when settings are changed
-  startSyncInterval() {
-    for (const manager of this.syncManagers.values()) {
-      try {
-        const intervalID = manager.startSyncInterval(
-          this.settings.syncInterval,
-        );
-        this.registerInterval(intervalID);
-      } catch {
-        // Already running
-      }
-    }
+  scheduleDebouncedSync() {
+    if (this.settings.syncStrategy !== "automatic") return;
+    this.clearDebouncedSync();
+    this.debounceTimer = setTimeout(
+      () => this.sync(),
+      this.settings.syncInterval * 1000,
+    );
   }
 
-  stopSyncInterval() {
-    for (const manager of this.syncManagers.values()) {
-      manager.stopSyncInterval();
-    }
-  }
-
-  restartSyncInterval() {
-    for (const manager of this.syncManagers.values()) {
-      manager.stopSyncInterval();
-      manager.startSyncInterval(this.settings.syncInterval);
+  clearDebouncedSync() {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
     }
   }
 

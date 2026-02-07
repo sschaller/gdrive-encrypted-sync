@@ -20,6 +20,7 @@ export default class EventsListener {
     entries: ProfileEntry[],
     private settings: GDriveSyncSettings,
     private logger: Logger,
+    private onUserChange?: () => void,
   ) {
     this.entries = entries;
   }
@@ -125,6 +126,7 @@ export default class EventsListener {
     };
     await entry.metadataStore.save();
     await this.logger.info("Updated created file", file.path);
+    this.onUserChange?.();
   }
 
   private async onDeleteForProfile(filePath: string, entry: ProfileEntry) {
@@ -135,6 +137,7 @@ export default class EventsListener {
     entry.metadataStore.data.files[metaPath].deletedAt = Date.now();
     await entry.metadataStore.save();
     await this.logger.info("Updated deleted file", filePath);
+    this.onUserChange?.();
   }
 
   private async onModifyForProfile(file: TAbstractFile, entry: ProfileEntry) {
@@ -154,6 +157,7 @@ export default class EventsListener {
     entry.metadataStore.data.files[metaPath].dirty = true;
     await entry.metadataStore.save();
     await this.logger.info("Updated modified file", file.path);
+    this.onUserChange?.();
   }
 
   private toMetaPath(filePath: string, profile: SyncProfile): string {

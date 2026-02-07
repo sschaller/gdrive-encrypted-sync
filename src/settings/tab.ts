@@ -111,7 +111,7 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
 
     const syncStrategies = {
       manual: "Manually",
-      interval: "On Interval",
+      automatic: "Automatic",
     };
     const uploadStrategySetting = new Setting(containerEl)
       .setName("Sync strategy")
@@ -123,20 +123,18 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
     }
     const intervalSettings = new Setting(containerEl)
       .setName("Sync interval")
-      .setDesc("Interval in minutes between automatic syncs")
+      .setDesc("Seconds to wait after the last change before syncing")
       .addText((text) =>
         text
-          .setPlaceholder("Interval in minutes")
+          .setPlaceholder("Interval in seconds")
           .setValue(syncInterval)
           .onChange(async (value) => {
             this.plugin.settings.syncInterval = parseInt(value) || 1;
             await this.plugin.saveSettings();
-            // We need to restart the interval if the value is changed
-            this.plugin.restartSyncInterval();
           }),
       );
     intervalSettings.setDisabled(
-      this.plugin.settings.syncStrategy !== "interval",
+      this.plugin.settings.syncStrategy !== "automatic",
     );
 
     uploadStrategySetting.addDropdown((dropdown) =>
@@ -144,13 +142,11 @@ export default class GDriveSyncSettingsTab extends PluginSettingTab {
         .addOptions(syncStrategies)
         .setValue(this.plugin.settings.syncStrategy)
         .onChange(async (value: keyof typeof syncStrategies) => {
-          intervalSettings.setDisabled(value !== "interval");
+          intervalSettings.setDisabled(value !== "automatic");
           this.plugin.settings.syncStrategy = value;
           await this.plugin.saveSettings();
-          if (value === "interval") {
-            this.plugin.startSyncInterval();
-          } else {
-            this.plugin.stopSyncInterval();
+          if (value !== "automatic") {
+            this.plugin.clearDebouncedSync();
           }
         }),
     );
