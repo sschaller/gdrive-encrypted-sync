@@ -214,7 +214,7 @@ export default class GDriveSyncPlugin extends Plugin {
     const { codePromise, cancel } = waitForOAuthCode(state);
     this.cancelOAuth = cancel;
     const url = buildAuthUrl(this.settings.googleClientId, challenge, this.settings.oauthRedirectUri, state);
-    window.open(url);
+    window.location.href = url;
 
     try {
       const code = await codePromise;
