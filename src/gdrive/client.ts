@@ -276,6 +276,11 @@ export default class GDriveClient {
       3,
     );
 
+    if (response.status === 404) {
+      // File already doesn't exist on Drive — treat as success
+      return;
+    }
+
     if (response.status < 200 || response.status >= 400) {
       await this.logger.error("Failed to delete file", response);
       throw new DriveAPIError(

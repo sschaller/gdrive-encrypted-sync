@@ -380,6 +380,7 @@ export default class SyncManager {
           if (meta?.driveFileId) {
             await this.client.deleteFile(meta.driveFileId);
           }
+          this.metadataStore.data.files[action.filePath].driveFileId = null;
           this.metadataStore.data.files[action.filePath].deleted = true;
           this.metadataStore.data.files[action.filePath].deletedAt =
             Date.now();
